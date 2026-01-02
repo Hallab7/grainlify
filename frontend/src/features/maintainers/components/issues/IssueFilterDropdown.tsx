@@ -50,16 +50,16 @@ export function IssueFilterDropdown({ value, onChange, isOpen, onToggle, onClose
           />
           
           {/* Dropdown content */}
-          <div className={`absolute top-full left-0 right-0 mt-2 backdrop-blur-[40px] rounded-[20px] border z-50 overflow-hidden ${
+          <div className={`absolute top-full left-0 right-0 mt-2 rounded-[20px] border z-50 overflow-hidden ${
             isDark
-              ? 'bg-[#2d2820]/[0.4] border-white/10'
-              : 'bg-white/[0.12] border-white/20'
+              ? 'bg-[#3a3228] border-white/30'
+              : 'bg-[#d4c5b0] border-white/40'
           }`}>
             {/* Header */}
             <div className={`px-6 py-5 border-b-2 ${
               isDark
-                ? 'border-white/10 bg-gradient-to-b from-white/5 to-transparent'
-                : 'border-white/20 bg-gradient-to-b from-white/10 to-transparent'
+                ? 'border-white/20 bg-gradient-to-b from-white/10 to-transparent'
+                : 'border-white/30 bg-gradient-to-b from-white/15 to-transparent'
             }`}>
               <h3 className={`text-[17px] font-bold ${
                 isDark ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
@@ -75,8 +75,8 @@ export function IssueFilterDropdown({ value, onChange, isOpen, onToggle, onClose
                   key={option}
                   className={`w-full px-6 py-3.5 flex items-center justify-between transition-all group ${
                     isDark
-                      ? 'hover:bg-white/[0.08]'
-                      : 'hover:bg-white/[0.15]'
+                      ? 'hover:bg-[#4a3e30]'
+                      : 'hover:bg-[#c9b8a0]'
                   }`}
                   onClick={() => handleSelect(option)}
                 >
