@@ -191,7 +191,7 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
             
             {/* Dropdown Menu */}
             {isRepoDropdownOpen && (
-              <div className={`absolute top-full left-0 mt-2 w-[380px] rounded-[20px] border-2 shadow-[0_12px_48px_rgba(0,0,0,0.25)] z-50 overflow-hidden transition-colors ${
+              <div className={`absolute top-full left-0 mt-2 w-[380px] rounded-[20px] border-2 z-50 overflow-hidden transition-colors ${
                 theme === 'dark'
                   ? 'bg-[#3a3228] border-white/30'
                   : 'bg-[#d4c5b0] border-white/40'

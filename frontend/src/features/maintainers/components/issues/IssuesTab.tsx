@@ -832,7 +832,7 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
           />
           
           <div 
-            className={`fixed top-[140px] right-[350px] z-50 w-[350px] max-h-[calc(100vh-160px)] flex flex-col rounded-[20px] border-2 shadow-[0_20px_60px_rgba(0,0,0,0.3)] transition-colors ${
+            className={`fixed top-[140px] right-[350px] z-50 w-[350px] max-h-[calc(100vh-160px)] flex flex-col rounded-[20px] border-2 transition-colors ${
               isDark
                 ? 'bg-[#3a3228] border-white/30'
                 : 'bg-[#d4c5b0] border-white/40'

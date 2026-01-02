@@ -36,7 +36,7 @@ export function IssueFilterDropdown({ value, onChange, isOpen, onToggle, onClose
           />
           
           {/* Dropdown content */}
-          <div className="absolute top-full left-0 right-0 mt-2 bg-[#d4c5b0] rounded-[20px] border-2 border-white/40 shadow-[0_12px_48px_rgba(0,0,0,0.25)] z-50 overflow-hidden">
+          <div className="absolute top-full left-0 right-0 mt-2 bg-[#d4c5b0] rounded-[20px] border-2 border-white/40 z-50 overflow-hidden">
             {/* Header */}
             <div className="px-6 py-5 border-b-2 border-white/30 bg-gradient-to-b from-white/10 to-transparent">
               <h3 className="text-[17px] font-bold text-[#2d2820]">DEFAULT</h3>
