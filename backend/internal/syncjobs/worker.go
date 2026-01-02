@@ -119,25 +119,67 @@ FROM projects
 WHERE id = $1
 `, projectID).Scan(&fullName, &ownerUserID)
 	if err != nil {
+		slog.Error("sync job failed: project not found",
+			"job_id", jobID,
+			"project_id", projectID,
+			"error", err,
+		)
 		return err
 	}
 
 	linked, err := github.GetLinkedAccount(ctx, w.pool, ownerUserID, w.cfg.TokenEncKeyB64)
 	if err != nil {
-		return err
+		slog.Error("sync job failed: GitHub account not linked",
+			"job_id", jobID,
+			"project_id", projectID,
+			"user_id", ownerUserID,
+			"repo", fullName,
+			"error", err,
+			"hint", "User needs to link their GitHub account via OAuth",
+		)
+		return fmt.Errorf("github_not_linked: %w", err)
 	}
 
+	slog.Info("starting sync job",
+		"job_id", jobID,
+		"job_type", jobType,
+		"project_id", projectID,
+		"repo", fullName,
+		"user_id", ownerUserID,
+	)
+
+	var syncErr error
 	switch jobType {
 	case "sync_issues":
-		return w.syncIssues(ctx, projectID, fullName, linked.AccessToken)
+		syncErr = w.syncIssues(ctx, projectID, fullName, linked.AccessToken)
 	case "sync_prs":
-		return w.syncPRs(ctx, projectID, fullName, linked.AccessToken)
+		syncErr = w.syncPRs(ctx, projectID, fullName, linked.AccessToken)
 	default:
-		return fmt.Errorf("unknown job_type: %s", jobType)
+		syncErr = fmt.Errorf("unknown job_type: %s", jobType)
 	}
+
+	if syncErr != nil {
+		slog.Error("sync job failed",
+			"job_id", jobID,
+			"job_type", jobType,
+			"project_id", projectID,
+			"repo", fullName,
+			"error", syncErr,
+		)
+		return syncErr
+	}
+
+	slog.Info("sync job completed successfully",
+		"job_id", jobID,
+		"job_type", jobType,
+		"project_id", projectID,
+		"repo", fullName,
+	)
+	return nil
 }
 
 func (w *Worker) syncIssues(ctx context.Context, projectID uuid.UUID, fullName string, token string) error {
+	totalIssues := 0
 	for page := 1; page <= 50; page++ { // safety cap
 		if err := w.limiter.Wait(ctx); err != nil {
 			return err
@@ -155,6 +197,7 @@ func (w *Worker) syncIssues(ctx context.Context, projectID uuid.UUID, fullName s
 			if it.PullRequest != nil {
 				continue
 			}
+			totalIssues++
 			// Convert assignees to JSONB (array of login strings)
 			assigneesJSON, _ := json.Marshal(it.Assignees)
 			// Convert labels to JSONB (array of {name, color} objects)
@@ -193,22 +236,59 @@ ON CONFLICT (project_id, github_issue_id) DO UPDATE SET
 }
 
 func (w *Worker) syncPRs(ctx context.Context, projectID uuid.UUID, fullName string, token string) error {
+	totalPRs := 0
 	for page := 1; page <= 50; page++ { // safety cap
 		if err := w.limiter.Wait(ctx); err != nil {
 			return err
 		}
 		items, err := w.gh.ListPRsPage(ctx, token, fullName, page)
 		if err != nil {
+			slog.Error("failed to fetch PRs page",
+				"project_id", projectID,
+				"repo", fullName,
+				"page", page,
+				"error", err,
+			)
 			return err
 		}
 		if len(items) == 0 {
+			slog.Info("sync PRs completed",
+				"project_id", projectID,
+				"repo", fullName,
+				"total_prs", totalPRs,
+			)
 			return nil
 		}
 
 		for _, it := range items {
+			totalPRs++
+			
+			// Parse date strings from GitHub API
+			var createdAt, updatedAt, closedAt, mergedAt *time.Time
+			if it.CreatedAt != nil && *it.CreatedAt != "" {
+				if t, err := time.Parse(time.RFC3339, *it.CreatedAt); err == nil {
+					createdAt = &t
+				}
+			}
+			if it.UpdatedAt != nil && *it.UpdatedAt != "" {
+				if t, err := time.Parse(time.RFC3339, *it.UpdatedAt); err == nil {
+					updatedAt = &t
+				}
+			}
+			if it.ClosedAt != nil && *it.ClosedAt != "" {
+				if t, err := time.Parse(time.RFC3339, *it.ClosedAt); err == nil {
+					closedAt = &t
+				}
+			}
+			if it.MergedAt != nil && *it.MergedAt != "" {
+				if t, err := time.Parse(time.RFC3339, *it.MergedAt); err == nil {
+					mergedAt = &t
+				}
+			}
+			
 			_, _ = w.pool.Exec(ctx, `
-INSERT INTO github_pull_requests (project_id, github_pr_id, number, state, title, body, author_login, url, merged, last_seen_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+INSERT INTO github_pull_requests (project_id, github_pr_id, number, state, title, body, author_login, url, merged, created_at_github, updated_at_github, closed_at_github, merged_at_github, last_seen_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
 ON CONFLICT (project_id, github_pr_id) DO UPDATE SET
   number = EXCLUDED.number,
   state = EXCLUDED.state,
@@ -217,8 +297,12 @@ ON CONFLICT (project_id, github_pr_id) DO UPDATE SET
   author_login = EXCLUDED.author_login,
   url = EXCLUDED.url,
   merged = EXCLUDED.merged,
+  created_at_github = EXCLUDED.created_at_github,
+  updated_at_github = EXCLUDED.updated_at_github,
+  closed_at_github = EXCLUDED.closed_at_github,
+  merged_at_github = EXCLUDED.merged_at_github,
   last_seen_at = now()
-`, projectID, it.ID, it.Number, it.State, it.Title, it.Body, it.User.Login, it.HTMLURL, it.Merged)
+`, projectID, it.ID, it.Number, it.State, it.Title, it.Body, it.User.Login, it.HTMLURL, it.Merged, createdAt, updatedAt, closedAt, mergedAt)
 		}
 	}
 	return nil
