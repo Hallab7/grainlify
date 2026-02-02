@@ -159,6 +159,19 @@ export function Dashboard() {
     }
   }, []);
 
+  // Deep link: open specific issue when URL has tab=browse&project=...&issue=... (e.g. "review their application" link)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const projectParam = params.get("project");
+    const issueParam = params.get("issue");
+    const tabParam = params.get("tab") || params.get("page");
+    if (tabParam === "browse" && projectParam && issueParam) {
+      setCurrentPage("browse");
+      setSelectedProjectId(projectParam);
+      setSelectedIssue({ issueId: issueParam, projectId: projectParam });
+    }
+  }, []);
+
   // *******************************
   useEffect(() => {
     // Save tab in URL + localStorage whenever it changes
