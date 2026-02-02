@@ -932,3 +932,54 @@ export const postBotComment = (
     method: "POST",
     body: JSON.stringify({ body }),
   });
+
+export const withdrawApplication = (
+  projectId: string,
+  issueNumber: number,
+  commentId: number,
+) =>
+  apiRequest<{ ok: boolean }>(
+    `/projects/${projectId}/issues/${issueNumber}/withdraw`,
+    {
+      requiresAuth: true,
+      method: "POST",
+      body: JSON.stringify({ comment_id: commentId }),
+    },
+  );
+
+export const assignApplicant = (
+  projectId: string,
+  issueNumber: number,
+  assignee: string,
+) =>
+  apiRequest<{ ok: boolean }>(
+    `/projects/${projectId}/issues/${issueNumber}/assign`,
+    {
+      requiresAuth: true,
+      method: "POST",
+      body: JSON.stringify({ assignee }),
+    },
+  );
+
+export const unassignApplicant = (projectId: string, issueNumber: number) =>
+  apiRequest<{ ok: boolean }>(
+    `/projects/${projectId}/issues/${issueNumber}/unassign`,
+    {
+      requiresAuth: true,
+      method: "POST",
+    },
+  );
+
+export const rejectApplication = (
+  projectId: string,
+  issueNumber: number,
+  assignee: string,
+) =>
+  apiRequest<{ ok: boolean }>(
+    `/projects/${projectId}/issues/${issueNumber}/reject`,
+    {
+      requiresAuth: true,
+      method: "POST",
+      body: JSON.stringify({ assignee }),
+    },
+  );

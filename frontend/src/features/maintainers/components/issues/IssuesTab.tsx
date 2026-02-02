@@ -6,7 +6,7 @@ import { Issue } from '../../types';
 import { EmptyIssueState } from './EmptyIssueState';
 import { IssueCard } from '../../../../shared/components/ui/IssueCard';
 import { Modal, ModalFooter, ModalButton } from '../../../../shared/components/ui/Modal';
-import { applyToIssue, getProjectIssues, postBotComment } from '../../../../shared/api/client';
+import { applyToIssue, getProjectIssues, postBotComment, withdrawApplication, assignApplicant, unassignApplicant, rejectApplication } from '../../../../shared/api/client';
 import { formatDistanceToNow } from 'date-fns';
 import { IssueCardSkeleton } from '../../../../shared/components/IssueCardSkeleton';
 import RenderMarkdownContent from '../../../../app/utils/renderMarkdown';
@@ -23,6 +23,8 @@ interface IssuesTabProps {
   onRefresh?: () => void;
   initialSelectedIssueId?: string;
   initialSelectedProjectId?: string;
+  /** 'contributor' = issue detail from Dashboard (Browse): only Withdraw for own application. 'maintainer' = Maintainers Issues: Reject/Assign/Unassign */
+  viewMode?: 'contributor' | 'maintainer';
 }
 
 interface CommentFromAPI {
@@ -51,7 +53,7 @@ interface IssueFromAPI {
   last_seen_at: string;
 }
 
-export function IssuesTab({ onNavigate, selectedProjects, onRefresh, initialSelectedIssueId, initialSelectedProjectId }: IssuesTabProps) {
+export function IssuesTab({ onNavigate, selectedProjects, onRefresh, initialSelectedIssueId, initialSelectedProjectId, viewMode = 'maintainer' }: IssuesTabProps) {
   const { theme } = useTheme();
   const { userRole, user } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
@@ -82,6 +84,7 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh, initialSele
   const [botCommentDraft, setBotCommentDraft] = useState('');
   const [botCommentError, setBotCommentError] = useState<string | null>(null);
   const [isPostingBotComment, setIsPostingBotComment] = useState(false);
+  const [actionInProgress, setActionInProgress] = useState<{ type: 'withdraw' | 'assign' | 'unassign' | 'reject'; id: string } | null>(null);
   const [issues, setIssues] = useState<Array<IssueFromAPI & { projectName: string; projectId: string }>>([]);
   const [isLoadingIssues, setIsLoadingIssues] = useState(true);
   const filterBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -284,18 +287,19 @@ Only applications submitted via the apply link above will be considered. Please 
         const applicantLogin = applicantMatch ? applicantMatch[1] : comment.user.login;
         return {
           id: comment.id.toString(),
+          commentId: comment.id,
+          login: applicantLogin,
           author: {
             name: applicantLogin,
             avatar: getGitHubAvatar(applicantLogin, 48),
           },
           message: getApplicationMessage(body),
-        timeAgo: formatTimeAgo(comment.created_at),
-        isAssigned: issue.applicationStatus === 'assigned',
-        // These would need to come from user profile API in the future
-        contributions: 0,
-        rewards: 0,
-        projectsContributed: 0,
-        projectsLead: 0,
+          timeAgo: formatTimeAgo(comment.created_at),
+          isAssigned: issue.applicationStatus === 'assigned',
+          contributions: 0,
+          rewards: 0,
+          projectsContributed: 0,
+          projectsLead: 0,
         };
       });
 
@@ -442,6 +446,91 @@ Only applications submitted via the apply link above will be considered. Please 
       setIsPostingBotComment(false);
     }
   }, [selectedIssueFromAPI, botCommentDraft]);
+
+  const handleWithdraw = useCallback(async (commentId: number) => {
+    if (!selectedIssueFromAPI) return;
+    const key = `withdraw-${commentId}`;
+    setApplicationError(null);
+    try {
+      setActionInProgress({ type: 'withdraw', id: key });
+      await withdrawApplication(selectedIssueFromAPI.projectId, selectedIssueFromAPI.number, commentId);
+      setSelectedIssueFromAPI((prev) => {
+        if (!prev) return prev;
+        const comments = (prev.comments || []).filter((c) => c.id !== commentId);
+        return { ...prev, comments, comments_count: comments.length };
+      });
+      setIssues((prev) =>
+        prev.map((it) =>
+          it.github_issue_id === selectedIssueFromAPI.github_issue_id && it.projectId === selectedIssueFromAPI.projectId
+            ? { ...it, comments: (it.comments || []).filter((c) => c.id !== commentId), comments_count: (it.comments || []).filter((c) => c.id !== commentId).length }
+            : it
+        )
+      );
+    } catch (e: any) {
+      setApplicationError(e?.message || 'Failed to withdraw application');
+    } finally {
+      setActionInProgress(null);
+    }
+  }, [selectedIssueFromAPI]);
+
+  const handleAssign = useCallback(async (login: string) => {
+    if (!selectedIssueFromAPI) return;
+    const key = `assign-${login}`;
+    setApplicationError(null);
+    try {
+      setActionInProgress({ type: 'assign', id: key });
+      await assignApplicant(selectedIssueFromAPI.projectId, selectedIssueFromAPI.number, login);
+      const assignees = [{ login }];
+      setSelectedIssueFromAPI((prev) => prev ? { ...prev, assignees } : prev);
+      setIssues((prev) =>
+        prev.map((it) =>
+          it.github_issue_id === selectedIssueFromAPI.github_issue_id && it.projectId === selectedIssueFromAPI.projectId
+            ? { ...it, assignees }
+            : it
+        )
+      );
+    } catch (e: any) {
+      setApplicationError(e?.message || 'Failed to assign');
+    } finally {
+      setActionInProgress(null);
+    }
+  }, [selectedIssueFromAPI]);
+
+  const handleUnassign = useCallback(async () => {
+    if (!selectedIssueFromAPI) return;
+    setApplicationError(null);
+    try {
+      setActionInProgress({ type: 'unassign', id: 'unassign' });
+      await unassignApplicant(selectedIssueFromAPI.projectId, selectedIssueFromAPI.number);
+      setSelectedIssueFromAPI((prev) => prev ? { ...prev, assignees: [] } : prev);
+      setIssues((prev) =>
+        prev.map((it) =>
+          it.github_issue_id === selectedIssueFromAPI.github_issue_id && it.projectId === selectedIssueFromAPI.projectId
+            ? { ...it, assignees: [] }
+            : it
+        )
+      );
+    } catch (e: any) {
+      setApplicationError(e?.message || 'Failed to unassign');
+    } finally {
+      setActionInProgress(null);
+    }
+  }, [selectedIssueFromAPI]);
+
+  const handleReject = useCallback(async (login: string) => {
+    if (!selectedIssueFromAPI) return;
+    const key = `reject-${login}`;
+    setApplicationError(null);
+    try {
+      setActionInProgress({ type: 'reject', id: key });
+      await rejectApplication(selectedIssueFromAPI.projectId, selectedIssueFromAPI.number, login);
+      onRefresh?.();
+    } catch (e: any) {
+      setApplicationError(e?.message || 'Failed to reject');
+    } finally {
+      setActionInProgress(null);
+    }
+  }, [selectedIssueFromAPI, onRefresh]);
 
   const appliedFilterCount =
     selectedFilters.status.length +
@@ -865,6 +954,12 @@ Only applications submitted via the apply link above will be considered. Please 
                   </div>
                 )}
 
+                {applicationError && (
+                  <div className="mb-4 px-4 py-2 rounded-[12px] bg-red-500/10 border border-red-500/30 text-[13px] font-semibold text-red-400">
+                    {applicationError}
+                  </div>
+                )}
+
                 {(!applicationData || applicationData.applications.length === 0) && (
                   <div className="text-center py-16">
                     <div className="relative mx-auto mb-6 w-20 h-20">
@@ -888,7 +983,7 @@ Only applications submitted via the apply link above will be considered. Please 
 
                 {applicationData && applicationData.applications.length > 0 && (
                   <div className="space-y-4">
-                    {applicationData.applications.map((application) => {
+                    {applicationData.applications.map((application, appIndex) => {
                       const isExpanded = expandedApplications[application.id] || false;
 
                       return (
@@ -1008,36 +1103,70 @@ Only applications submitted via the apply link above will be considered. Please 
                                 </p>
                               </div>
 
-                              {/* Status & Action Buttons */}
+                              {/* Status & Action Buttons: contributor = Withdraw only (own application); maintainer = Reject / Assign / Unassign */}
                               <div className="flex items-center justify-between">
-                                {selectedIssue.applicationStatus === 'assigned' ? (
-                                  <>
-                                    <div className="flex items-center gap-2">
-                                      <div className="w-5 h-5 rounded-full bg-gradient-to-br from-[#c9983a] to-[#d4af37] flex items-center justify-center">
-                                        <CheckCircle className="w-3 h-3 text-white" strokeWidth={3} />
-                                      </div>
-                                      <span className={`text-[13px] font-bold transition-colors ${isDark ? 'text-[#c9983a]' : 'text-[#c9983a]'
-                                        }`}>Assigned</span>
-                                    </div>
-                                    <button className={`px-4 py-2 rounded-[8px] border text-[13px] font-semibold transition-all ${isDark
-                                      ? 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#e8dfd0] hover:text-[#c9983a]'
-                                      : 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#2d2820] hover:text-[#c9983a]'
-                                      }`}>
-                                      Unassign
+                                {viewMode === 'contributor' ? (
+                                  (application as { login?: string; commentId?: number }).login === user?.github?.login && (application as { commentId?: number }).commentId != null ? (
+                                    <button
+                                      onClick={() => handleWithdraw((application as { commentId: number }).commentId)}
+                                      disabled={actionInProgress?.type === 'withdraw'}
+                                      className={`px-4 py-2 rounded-[8px] border text-[13px] font-semibold transition-all ${isDark
+                                        ? 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#e8dfd0] hover:text-[#c9983a] disabled:opacity-50'
+                                        : 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#2d2820] hover:text-[#c9983a] disabled:opacity-50'
+                                        }`}
+                                    >
+                                      {actionInProgress?.type === 'withdraw' && actionInProgress?.id === `withdraw-${(application as { commentId: number }).commentId}` ? 'Withdrawing…' : 'Withdraw'}
                                     </button>
-                                  </>
+                                  ) : null
                                 ) : (
-                                  <>
-                                    <button className={`flex-1 px-4 py-2 rounded-[8px] border text-[13px] font-semibold transition-all mr-2 ${isDark
-                                      ? 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#e8dfd0] hover:text-[#c9983a]'
-                                      : 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#2d2820] hover:text-[#c9983a]'
-                                      }`}>
-                                      Reject
-                                    </button>
-                                    <button className="flex-1 px-4 py-2 rounded-[8px] bg-gradient-to-br from-[#c9983a]/30 to-[#d4af37]/25 border border-[#c9983a]/40 text-[13px] font-semibold text-[#2d2820] hover:from-[#c9983a]/40 hover:to-[#d4af37]/35 hover:shadow-[0_4px_16px_rgba(201,152,58,0.3)] transition-all">
-                                      Assign
-                                    </button>
-                                  </>
+                                  (() => {
+                                    const isAssigned = Array.isArray(selectedIssueFromAPI?.assignees) && (selectedIssueFromAPI?.assignees?.length ?? 0) > 0;
+                                    if (isAssigned) {
+                                      return (
+                                        <>
+                                          <div className="flex items-center gap-2">
+                                            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-[#c9983a] to-[#d4af37] flex items-center justify-center">
+                                              <CheckCircle className="w-3 h-3 text-white" strokeWidth={3} />
+                                            </div>
+                                            <span className={`text-[13px] font-bold ${isDark ? 'text-[#c9983a]' : 'text-[#c9983a]'}`}>Assigned</span>
+                                          </div>
+                                          {appIndex === 0 ? (
+                                            <button
+                                              onClick={() => handleUnassign()}
+                                              disabled={!!actionInProgress}
+                                              className={`px-4 py-2 rounded-[8px] border text-[13px] font-semibold transition-all ${isDark
+                                                ? 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#e8dfd0] hover:text-[#c9983a] disabled:opacity-50'
+                                                : 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#2d2820] hover:text-[#c9983a] disabled:opacity-50'
+                                                }`}
+                                            >
+                                              {actionInProgress?.type === 'unassign' ? 'Unassigning…' : 'Unassign'}
+                                            </button>
+                                          ) : null}
+                                        </>
+                                      );
+                                    }
+                                    return (
+                                      <>
+                                        <button
+                                          onClick={() => handleReject((application as { login: string }).login)}
+                                          disabled={!!actionInProgress}
+                                          className={`flex-1 px-4 py-2 rounded-[8px] border text-[13px] font-semibold transition-all mr-2 ${isDark
+                                            ? 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#e8dfd0] hover:text-[#c9983a] disabled:opacity-50'
+                                            : 'bg-white/30 hover:bg-white/50 border-white/40 hover:border-[#c9983a]/40 text-[#2d2820] hover:text-[#c9983a] disabled:opacity-50'
+                                            }`}
+                                        >
+                                          {actionInProgress?.id === `reject-${(application as { login: string }).login}` ? 'Rejecting…' : 'Reject'}
+                                        </button>
+                                        <button
+                                          onClick={() => handleAssign((application as { login: string }).login)}
+                                          disabled={!!actionInProgress}
+                                          className="flex-1 px-4 py-2 rounded-[8px] bg-gradient-to-br from-[#c9983a]/30 to-[#d4af37]/25 border border-[#c9983a]/40 text-[13px] font-semibold text-[#2d2820] hover:from-[#c9983a]/40 hover:to-[#d4af37]/35 hover:shadow-[0_4px_16px_rgba(201,152,58,0.3)] transition-all disabled:opacity-50"
+                                        >
+                                          {actionInProgress?.id === `assign-${(application as { login: string }).login}` ? 'Assigning…' : 'Assign'}
+                                        </button>
+                                      </>
+                                    );
+                                  })()
                                 )}
                               </div>
                             </div>

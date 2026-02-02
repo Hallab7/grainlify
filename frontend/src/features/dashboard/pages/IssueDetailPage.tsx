@@ -116,6 +116,7 @@ export function IssueDetailPage({ issueId, projectId, onClose }: IssueDetailPage
           selectedProjects={selectedProjects}
           initialSelectedIssueId={issueId}
           initialSelectedProjectId={projectId}
+          viewMode="contributor"
         />
       )}
     </div>
