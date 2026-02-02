@@ -87,6 +87,8 @@ export function Dashboard() {
   const [selectedEcosystemName, setSelectedEcosystemName] = useState<
     string | null
   >(null);
+  const [selectedEcosystemDescription, setSelectedEcosystemDescription] = useState<string | null>(null);
+  const [selectedEcosystemLogoUrl, setSelectedEcosystemLogoUrl] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedEventName, setSelectedEventName] = useState<string | null>(
     null,
@@ -197,6 +199,8 @@ export function Dashboard() {
     setSelectedIssue(null);
     setSelectedEcosystemId(null);
     setSelectedEcosystemName(null);
+    setSelectedEcosystemDescription(null);
+    setSelectedEcosystemLogoUrl(null);
     setSelectedEventId(null);
     setSelectedEventName(null);
   };
@@ -263,6 +267,8 @@ export function Dashboard() {
     setSelectedIssue(null);
     setSelectedEcosystemId(null);
     setSelectedEcosystemName(null);
+    setSelectedEcosystemDescription(null);
+    setSelectedEcosystemLogoUrl(null);
     setSelectedEventId(null);
     setSelectedEventName(null);
     if (role === "maintainer") {
@@ -272,14 +278,23 @@ export function Dashboard() {
     }
   };
 
-  const handleEcosystemClick = (ecosystemId: string, ecosystemName: string) => {
+  const handleEcosystemClick = (
+    ecosystemId: string,
+    ecosystemName: string,
+    description?: string | null,
+    logoUrl?: string | null,
+  ) => {
     setSelectedEcosystemId(ecosystemId);
     setSelectedEcosystemName(ecosystemName);
+    setSelectedEcosystemDescription(description ?? null);
+    setSelectedEcosystemLogoUrl(logoUrl ?? null);
   };
 
   const handleBackFromEcosystem = () => {
     setSelectedEcosystemId(null);
     setSelectedEcosystemName(null);
+    setSelectedEcosystemDescription(null);
+    setSelectedEcosystemLogoUrl(null);
   };
 
   // Role-based navigation items
@@ -709,6 +724,8 @@ export function Dashboard() {
                     <EcosystemDetailPage
                       ecosystemId={selectedEcosystemId}
                       ecosystemName={selectedEcosystemName}
+                      initialDescription={selectedEcosystemDescription}
+                      initialLogoUrl={selectedEcosystemLogoUrl}
                       onBack={handleBackFromEcosystem}
                       onProjectClick={(id) => setSelectedProjectId(id)}
                     />

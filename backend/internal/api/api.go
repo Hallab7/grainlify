@@ -236,6 +236,7 @@ func New(cfg config.Config, deps Deps) *fiber.App {
 
 	ecosystemsAdmin := handlers.NewEcosystemsAdminHandler(deps.DB)
 	adminGroup.Get("/ecosystems", auth.RequireRole("admin"), ecosystemsAdmin.List())
+	adminGroup.Get("/ecosystems/:id", auth.RequireRole("admin"), ecosystemsAdmin.GetByID())
 	adminGroup.Post("/ecosystems", auth.RequireRole("admin"), ecosystemsAdmin.Create())
 	adminGroup.Put("/ecosystems/:id", auth.RequireRole("admin"), ecosystemsAdmin.Update())
 	adminGroup.Delete("/ecosystems/:id", auth.RequireRole("admin"), ecosystemsAdmin.Delete())

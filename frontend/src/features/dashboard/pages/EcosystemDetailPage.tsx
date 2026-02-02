@@ -35,11 +35,14 @@ const getProjectColor = (name: string): string => {
 interface EcosystemDetailPageProps {
   ecosystemId: string;
   ecosystemName: string;
+  /** From list page (GET /ecosystems) so detail page shows same icon/description when detail fetch is pending or empty */
+  initialDescription?: string | null;
+  initialLogoUrl?: string | null;
   onBack: () => void;
   onProjectClick?: (id: string) => void;
 }
 
-export function EcosystemDetailPage({ ecosystemId, ecosystemName, onBack, onProjectClick }: EcosystemDetailPageProps) {
+export function EcosystemDetailPage({ ecosystemId, ecosystemName, initialDescription, initialLogoUrl, onBack, onProjectClick }: EcosystemDetailPageProps) {
   const { theme } = useTheme();
   const [activeTab, setActiveTab] = useState<'overview' | 'projects' | 'community'>('overview');
   const [searchQuery, setSearchQuery] = useState('');
@@ -156,17 +159,17 @@ export function EcosystemDetailPage({ ecosystemId, ecosystemName, onBack, onProj
   const apiKeyAreas = normalizeKeyAreas(detail?.key_areas);
   const apiTechnologies = normalizeTechnologies(detail?.technologies);
 
-  // Use API values for logo and description when detail is loaded (from admin modal data)
+  // Prefer API (detail fetch) for logo/description; fall back to list data (initialDescription/initialLogoUrl) so same icon/description as list page
   const apiDescription = hasDetail && detail?.description != null ? String(detail.description).trim() : '';
   const apiLogoUrl = hasDetail && detail?.logo_url != null && String(detail.logo_url).trim() !== '' ? String(detail.logo_url).trim() : null;
+  const displayDescription = apiDescription || (initialDescription != null && initialDescription !== '' ? String(initialDescription).trim() : '') || (hasDetail ? '' : 'Projects building decentralized protocols, tooling, and infrastructure.');
+  const displayLogoUrl = apiLogoUrl || (initialLogoUrl != null && initialLogoUrl !== '' ? String(initialLogoUrl).trim() : null);
 
   const ecosystemData = {
     name: (hasDetail && detail?.name) ? detail.name : ecosystemName,
-    logo: apiLogoUrl ? undefined : ecosystemName.charAt(0).toUpperCase(),
-    logoUrl: apiLogoUrl,
-    description: hasDetail
-      ? apiDescription
-      : 'Projects building decentralized protocols, tooling, and infrastructure.',
+    logo: displayLogoUrl ? undefined : ecosystemName.charAt(0).toUpperCase(),
+    logoUrl: displayLogoUrl,
+    description: displayDescription,
     languages: [] as { name: string; percentage: number }[],
     links: hasDetail && apiLinks.length > 0
       ? apiLinks
@@ -246,9 +249,9 @@ export function EcosystemDetailPage({ ecosystemId, ecosystemName, onBack, onProj
           {/* Ecosystem Header */}
           <div className="backdrop-blur-[40px] rounded-[16px] md:rounded-[24px] border bg-white/[0.12] border-white/20 p-4 md:p-6">
             <div className="flex items-center gap-3 md:gap-4 mb-3 md:mb-4">
-              <div className="w-12 h-12 md:w-16 md:h-16 rounded-full bg-gradient-to-br from-[#c9983a] to-[#d4af37] flex items-center justify-center flex-shrink-0 overflow-hidden">
+              <div className={`w-12 h-12 md:w-16 md:h-16 rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden ${ecosystemData.logoUrl ? 'bg-white' : 'bg-gradient-to-br from-[#c9983a] to-[#d4af37]'}`}>
                 {ecosystemData.logoUrl ? (
-                  <img src={ecosystemData.logoUrl} alt="" className="w-full h-full object-cover" />
+                  <img src={ecosystemData.logoUrl} alt="" className="w-full h-full object-contain p-0.5" />
                 ) : (
                   <span className="text-[18px] md:text-[24px] font-bold text-white">{ecosystemData.logo}</span>
                 )}

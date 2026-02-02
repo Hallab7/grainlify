@@ -641,6 +641,28 @@ export const getAdminEcosystems = () =>
     method: "GET",
   });
 
+export const getAdminEcosystem = (id: string) =>
+  apiRequest<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string | null;
+    logo_url: string | null;
+    website_url: string | null;
+    status: string;
+    project_count: number;
+    user_count: number;
+    created_at: string;
+    updated_at: string;
+    about: string | null;
+    links: Array<{ label: string; url: string }> | null;
+    key_areas: Array<{ title: string; description: string }> | null;
+    technologies: string[] | null;
+  }>(`/admin/ecosystems/${id}`, {
+    requiresAuth: true,
+    method: "GET",
+  });
+
 export const deleteEcosystem = (id: string) =>
   apiRequest<{
     ok: boolean;

@@ -100,6 +100,65 @@ LIMIT 200
 	}
 }
 
+// GetByID returns one ecosystem by ID with full detail (about, links, key_areas, technologies) for admin edit.
+func (h *EcosystemsAdminHandler) GetByID() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if h.db == nil || h.db.Pool == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "db_not_configured"})
+		}
+		ecoID, err := uuid.Parse(c.Params("id"))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid_ecosystem_id"})
+		}
+		var id uuid.UUID
+		var slug, name, status string
+		var desc, website, logoURL, about *string
+		var linksJSON, keyAreasJSON, technologiesJSON []byte
+		var createdAt, updatedAt time.Time
+		err = h.db.Pool.QueryRow(c.Context(), `
+SELECT e.id, e.slug, e.name, e.description, e.website_url, e.logo_url, e.status, e.created_at, e.updated_at,
+       e.about, e.links, e.key_areas, e.technologies
+FROM ecosystems e
+WHERE e.id = $1
+`, ecoID).Scan(&id, &slug, &name, &desc, &website, &logoURL, &status, &createdAt, &updatedAt, &about, &linksJSON, &keyAreasJSON, &technologiesJSON)
+		if err != nil {
+			if err.Error() == "no rows in result set" {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "ecosystem_not_found"})
+			}
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "ecosystem_lookup_failed"})
+		}
+		var links, keyAreas, technologies interface{}
+		if len(linksJSON) > 0 {
+			_ = json.Unmarshal(linksJSON, &links)
+		}
+		if len(keyAreasJSON) > 0 {
+			_ = json.Unmarshal(keyAreasJSON, &keyAreas)
+		}
+		if len(technologiesJSON) > 0 {
+			_ = json.Unmarshal(technologiesJSON, &technologies)
+		}
+		var projectCnt, userCnt int64
+		_ = h.db.Pool.QueryRow(c.Context(), `SELECT COUNT(p.id), COUNT(DISTINCT p.owner_user_id) FROM projects p WHERE p.ecosystem_id = $1`, ecoID).Scan(&projectCnt, &userCnt)
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{
+			"id":             id.String(),
+			"slug":           slug,
+			"name":           name,
+			"description":    desc,
+			"website_url":    website,
+			"logo_url":       logoURL,
+			"status":         status,
+			"created_at":     createdAt,
+			"updated_at":     updatedAt,
+			"about":          about,
+			"links":          links,
+			"key_areas":      keyAreas,
+			"technologies":   technologies,
+			"project_count":  projectCnt,
+			"user_count":     userCnt,
+		})
+	}
+}
+
 type ecosystemUpsertRequest struct {
 	Slug         string          `json:"slug"`
 	Name         string          `json:"name"`
@@ -209,6 +268,7 @@ func (h *EcosystemsAdminHandler) Update() fiber.Handler {
 			technologiesJSON = []byte("[]")
 		}
 
+		aboutVal := strings.TrimSpace(req.About)
 		ct, err := h.db.Pool.Exec(c.Context(), `
 UPDATE ecosystems
 SET slug = COALESCE($2, slug),
@@ -217,13 +277,13 @@ SET slug = COALESCE($2, slug),
     website_url = COALESCE(NULLIF($5,''), website_url),
     logo_url = COALESCE(NULLIF($6,''), logo_url),
     status = COALESCE(NULLIF($7,''), status),
-    about = COALESCE(NULLIF($8,''), about),
+    about = NULLIF($8, ''),
     links = COALESCE($9::jsonb, links),
     key_areas = COALESCE($10::jsonb, key_areas),
     technologies = COALESCE($11::jsonb, technologies),
     updated_at = now()
 WHERE id = $1
-`, ecoID, slugVal, name, strings.TrimSpace(req.Description), strings.TrimSpace(req.WebsiteURL), strings.TrimSpace(req.LogoURL), status, strings.TrimSpace(req.About), linksJSON, keyAreasJSON, technologiesJSON)
+`, ecoID, slugVal, name, strings.TrimSpace(req.Description), strings.TrimSpace(req.WebsiteURL), strings.TrimSpace(req.LogoURL), status, aboutVal, linksJSON, keyAreasJSON, technologiesJSON)
 		if errors.Is(err, pgx.ErrNoRows) || ct.RowsAffected() == 0 {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "ecosystem_not_found"})
 		}

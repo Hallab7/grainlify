@@ -5,7 +5,7 @@ import { Modal, ModalFooter, ModalButton, ModalInput, ModalSelect } from '../../
 import { getEcosystems } from '../../../shared/api/client';
 
 interface EcosystemsPageProps {
-  onEcosystemClick: (id: string, name: string) => void;
+  onEcosystemClick: (id: string, name: string, description?: string | null, logoUrl?: string | null) => void;
 }
 
 export function EcosystemsPage({ onEcosystemClick }: EcosystemsPageProps) {
@@ -287,7 +287,7 @@ export function EcosystemsPage({ onEcosystemClick }: EcosystemsPageProps) {
             return (
           <div
             key={ecosystem.id}
-            onClick={() => onEcosystemClick(ecosystem.id, ecosystem.name)}
+            onClick={() => onEcosystemClick(ecosystem.id, ecosystem.name, ecosystem.description, ecosystem.logo_url)}
             className={`backdrop-blur-[30px] rounded-[16px] md:rounded-[20px] border p-4 md:p-6 transition-all cursor-pointer group touch-manipulation ${
               theme === 'dark'
                 ? 'bg-white/[0.08] border-white/10 hover:bg-white/[0.12] hover:shadow-[0_8px_24px_rgba(201,152,58,0.15)] active:bg-white/[0.15]'

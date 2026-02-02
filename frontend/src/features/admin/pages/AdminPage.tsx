@@ -4,7 +4,7 @@ import { Shield, Globe, Plus, Sparkles, Trash2, ExternalLink, Calendar, Pencil, 
 import { toast } from 'sonner';
 import { Modal, ModalFooter, ModalButton, ModalInput, ModalSelect } from '../../../shared/components/ui/Modal';
 import { DatePicker } from '../../../shared/components/ui/DatePicker';
-import { createEcosystem, getAdminEcosystems, deleteEcosystem, updateEcosystem, createOpenSourceWeekEvent, getAdminOpenSourceWeekEvents, deleteOpenSourceWeekEvent } from '../../../shared/api/client';
+import { createEcosystem, getAdminEcosystems, getAdminEcosystem, deleteEcosystem, updateEcosystem, createOpenSourceWeekEvent, getAdminOpenSourceWeekEvents, deleteOpenSourceWeekEvent } from '../../../shared/api/client';
 
 interface EcosystemLink {
   label: string;
@@ -446,23 +446,70 @@ export function AdminPage() {
     }
   };
 
-  const openEditModal = (ecosystem: Ecosystem) => {
-    const links = Array.isArray(ecosystem.links) ? ecosystem.links : [];
-    const keyAreas = Array.isArray(ecosystem.key_areas) ? ecosystem.key_areas : [];
-    const technologies = Array.isArray(ecosystem.technologies) ? ecosystem.technologies : [];
-    setEditFormData({
-      name: ecosystem.name,
-      description: ecosystem.description || '',
-      logoUrl: ecosystem.logo_url || '',
-      status: ecosystem.status,
-      websiteUrl: ecosystem.website_url || '',
-      about: ecosystem.about || '',
-      links: links.map((l) => ({ label: l.label || '', url: l.url || '' })),
-      key_areas: keyAreas.map((k) => ({ title: k.title || '', description: k.description || '' })),
-      technologies: [...technologies],
-    });
+  const openEditModal = async (ecosystem: Ecosystem) => {
     setEditingEcosystem(ecosystem);
     setErrors({});
+    let data: {
+      name: string;
+      description: string | null;
+      logo_url: string | null;
+      website_url: string | null;
+      status: string;
+      about: string | null;
+      links: Ecosystem['links'];
+      key_areas: Ecosystem['key_areas'];
+      technologies: Ecosystem['technologies'];
+    } = {
+      name: ecosystem.name ?? '',
+      description: ecosystem.description ?? null,
+      logo_url: ecosystem.logo_url ?? null,
+      website_url: ecosystem.website_url ?? null,
+      status: ecosystem.status ?? 'active',
+      about: ecosystem.about ?? null,
+      links: ecosystem.links ?? null,
+      key_areas: ecosystem.key_areas ?? null,
+      technologies: ecosystem.technologies ?? null,
+    };
+    try {
+      const detail = await getAdminEcosystem(ecosystem.id);
+      data = {
+        name: detail.name ?? '',
+        description: detail.description ?? null,
+        logo_url: detail.logo_url ?? null,
+        website_url: detail.website_url ?? null,
+        status: detail.status ?? 'active',
+        about: detail.about ?? null,
+        links: detail.links ?? null,
+        key_areas: detail.key_areas ?? null,
+        technologies: detail.technologies ?? null,
+      };
+    } catch (err) {
+      console.error('Failed to load ecosystem for edit:', err);
+      toast.error('Failed to load ecosystem details');
+      setEditingEcosystem(null);
+      return;
+    }
+    const rawLinks = data.links;
+    const linksArr = Array.isArray(rawLinks)
+      ? rawLinks.map((l: { label?: string; url?: string }) => ({ label: String(l?.label ?? ''), url: String(l?.url ?? '') }))
+      : [];
+    const rawKeyAreas = data.key_areas;
+    const keyAreasArr = Array.isArray(rawKeyAreas)
+      ? rawKeyAreas.map((k: { title?: string; description?: string }) => ({ title: String(k?.title ?? ''), description: String(k?.description ?? '') }))
+      : [];
+    const rawTech = data.technologies;
+    const technologiesArr = Array.isArray(rawTech) ? rawTech.map((t: unknown) => String(t ?? '')) : [];
+    setEditFormData({
+      name: data.name,
+      description: data.description ?? '',
+      logoUrl: data.logo_url ?? '',
+      status: data.status,
+      websiteUrl: data.website_url ?? '',
+      about: data.about ?? '',
+      links: linksArr,
+      key_areas: keyAreasArr,
+      technologies: technologiesArr,
+    });
   };
 
   const handleEditSubmit = async (e: React.FormEvent) => {
@@ -489,16 +536,20 @@ export function AdminPage() {
 
     try {
       setErrorMessage(null);
+      const linksToSave = (editFormData.links ?? []).filter((l) => (l?.label ?? '').trim() || (l?.url ?? '').trim());
+      const keyAreasToSave = (editFormData.key_areas ?? []).filter((k) => (k?.title ?? '').trim() || (k?.description ?? '').trim());
+      const technologiesToSave = (editFormData.technologies ?? []).filter((t) => String(t).trim());
+
       await updateEcosystem(editingEcosystem.id, {
         name: editFormData.name,
         description: editFormData.description || undefined,
         website_url: editFormData.websiteUrl || undefined,
         logo_url: editFormData.logoUrl || undefined,
         status: editFormData.status as 'active' | 'inactive',
-        about: editFormData.about || undefined,
-        links: editFormData.links.filter((l) => l.label.trim() || l.url.trim()).length ? editFormData.links : undefined,
-        key_areas: editFormData.key_areas.filter((k) => k.title.trim() || k.description.trim()).length ? editFormData.key_areas : undefined,
-        technologies: editFormData.technologies.filter((t) => t.trim()).length ? editFormData.technologies : undefined,
+        about: editFormData.about ?? '',
+        links: linksToSave,
+        key_areas: keyAreasToSave,
+        technologies: technologiesToSave,
       });
 
       // Success - close modal and reset form
