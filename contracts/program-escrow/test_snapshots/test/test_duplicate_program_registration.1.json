@@ -55,6 +55,79 @@
             "key": {
               "vec": [
                 {
+                  "symbol": "MultisigConfig"
+                },
+                {
+                  "string": "Hackathon2024"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "MultisigConfig"
+                    },
+                    {
+                      "string": "Hackathon2024"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "map": [
+                    {
+                      "key": {
+                        "symbol": "required_signatures"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "signers"
+                      },
+                      "val": {
+                        "vec": []
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "threshold_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 9223372036854775807,
+                          "lo": 18446744073709551615
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+            "key": {
+              "vec": [
+                {
                   "symbol": "State"
                 },
                 {
@@ -755,7 +828,7 @@
             "data": {
               "vec": [
                 {
-                  "string": "caught panic 'Program already exists' from contract function 'Symbol(obj#109)'"
+                  "string": "caught panic 'Program already exists' from contract function 'Symbol(obj#123)'"
                 },
                 {
                   "string": "Hackathon2024"

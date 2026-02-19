@@ -962,3 +962,256 @@ fn test_payout_record_integrity() {
     assert_eq!(records.get(3).unwrap().recipient, recipient1);
     assert_eq!(records.get(3).unwrap().amount, 15_000_000_000);
 }
+
+// ============================================================================
+// CLAIM PERIOD TESTS FOR PROGRAM ESCROW
+// ============================================================================
+
+#[test]
+fn test_set_program_claim_window_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, admin, token, program_id) = setup_program(&env);
+
+    // Should not panic
+    contract.set_program_claim_window(&env, program_id, 7200);
+}
+
+#[test]
+fn test_authorize_program_schedule_claim_creates_record() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, admin, token, program_id) = setup_program_with_funds(&env, 100_000_000_000);
+
+    let recipient = Address::generate(&env);
+    let release_time = env.ledger().timestamp() + 5000;
+
+    // Create a release schedule first
+    contract.create_program_release_schedule(
+        &env,
+        program_id.clone(),
+        10_000_000_000,
+        release_time,
+        recipient.clone(),
+    );
+
+    // Set claim window and authorize claim
+    contract.set_program_claim_window(&env, program_id.clone(), 3600);
+    contract.authorize_program_schedule_claim(&env, program_id.clone(), 1);
+
+    // Verify pending claim exists
+    let claim = contract.get_program_pending_claim(&env, program_id, 1);
+    assert_eq!(claim.recipient, recipient);
+    assert_eq!(claim.amount, 10_000_000_000);
+    assert!(!claim.claimed);
+    assert!(claim.expires_at > env.ledger().timestamp());
+}
+
+#[test]
+fn test_claim_program_schedule_transfers_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, admin, token, program_id) = setup_program_with_funds(&env, 100_000_000_000);
+
+    let recipient = Address::generate(&env);
+    let release_time = env.ledger().timestamp() + 5000;
+
+    contract.create_program_release_schedule(
+        &env,
+        program_id.clone(),
+        10_000_000_000,
+        release_time,
+        recipient.clone(),
+    );
+
+    contract.set_program_claim_window(&env, program_id.clone(), 3600);
+    contract.authorize_program_schedule_claim(&env, program_id.clone(), 1);
+
+    // Claim within window
+    contract.claim_program_schedule(&env, program_id.clone(), 1);
+
+    // Balance should be reduced
+    let remaining = contract.get_remaining_balance(&env, program_id.clone());
+    assert_eq!(remaining, 90_000_000_000);
+
+    // Schedule should be marked released
+    let schedule = contract.get_program_release_schedule(&env, program_id, 1);
+    assert!(schedule.released);
+}
+
+#[test]
+fn test_cancel_program_claim_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, admin, token, program_id) = setup_program_with_funds(&env, 100_000_000_000);
+
+    let recipient = Address::generate(&env);
+    let release_time = env.ledger().timestamp() + 5000;
+
+    contract.create_program_release_schedule(
+        &env,
+        program_id.clone(),
+        10_000_000_000,
+        release_time,
+        recipient.clone(),
+    );
+
+    contract.set_program_claim_window(&env, program_id.clone(), 3600);
+    contract.authorize_program_schedule_claim(&env, program_id.clone(), 1);
+
+    // Admin cancels the claim
+    contract.cancel_program_claim(&env, program_id.clone(), 1);
+
+    // Balance should be unchanged
+    let remaining = contract.get_remaining_balance(&env, program_id);
+    assert_eq!(remaining, 100_000_000_000);
+}
+
+#[test]
+#[should_panic]
+fn test_claim_program_schedule_after_window_expires() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, admin, token, program_id) = setup_program_with_funds(&env, 100_000_000_000);
+
+    let recipient = Address::generate(&env);
+    let release_time = env.ledger().timestamp() + 5000;
+
+    contract.create_program_release_schedule(
+        &env,
+        program_id.clone(),
+        10_000_000_000,
+        release_time,
+        recipient.clone(),
+    );
+
+    contract.set_program_claim_window(&env, program_id.clone(), 3600);
+    contract.authorize_program_schedule_claim(&env, program_id.clone(), 1);
+
+    // Advance past the claim window
+    env.ledger().set_timestamp(env.ledger().timestamp() + 3601);
+
+    // Should panic — window expired
+    contract.claim_program_schedule(&env, program_id, 1);
+}
+
+#[test]
+#[should_panic]
+fn test_get_program_pending_claim_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _, _, program_id) = setup_program(&env);
+
+    // No claim was ever authorized
+    contract.get_program_pending_claim(&env, program_id, 99);
+}
+
+#[test]
+#[should_panic]
+fn test_cancel_program_claim_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _, _, program_id) = setup_program(&env);
+
+    // Nothing to cancel
+    contract.cancel_program_claim(&env, program_id, 1);
+}
+
+#[test]
+#[should_panic]
+fn test_claim_program_schedule_twice_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, admin, token, program_id) = setup_program_with_funds(&env, 100_000_000_000);
+
+    let recipient = Address::generate(&env);
+    let release_time = env.ledger().timestamp() + 5000;
+
+    contract.create_program_release_schedule(
+        &env,
+        program_id.clone(),
+        10_000_000_000,
+        release_time,
+        recipient.clone(),
+    );
+
+    contract.set_program_claim_window(&env, program_id.clone(), 3600);
+    contract.authorize_program_schedule_claim(&env, program_id.clone(), 1);
+
+    contract.claim_program_schedule(&env, program_id.clone(), 1);
+    // Second claim should panic
+    contract.claim_program_schedule(&env, program_id, 1);
+}
+
+#[test]
+fn test_cancel_then_reauthorize_claim() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, admin, token, program_id) = setup_program_with_funds(&env, 100_000_000_000);
+
+    let recipient = Address::generate(&env);
+    let new_recipient = Address::generate(&env);
+    let release_time = env.ledger().timestamp() + 5000;
+
+    contract.create_program_release_schedule(
+        &env,
+        program_id.clone(),
+        10_000_000_000,
+        release_time,
+        recipient.clone(),
+    );
+
+    contract.set_program_claim_window(&env, program_id.clone(), 3600);
+    contract.authorize_program_schedule_claim(&env, program_id.clone(), 1);
+
+    // Cancel original claim
+    contract.cancel_program_claim(&env, program_id.clone(), 1);
+
+    contract.authorize_program_schedule_claim(&env, program_id.clone(), 1);
+
+    let claim = contract.get_program_pending_claim(&env, program_id, 1);
+    assert!(!claim.claimed);
+    assert_eq!(claim.amount, 10_000_000_000);
+}
+
+#[test]
+fn test_claim_does_not_affect_other_schedules() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, admin, token, program_id) = setup_program_with_funds(&env, 100_000_000_000);
+
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+    let release_time = env.ledger().timestamp() + 5000;
+
+    // Create two schedules
+    contract.create_program_release_schedule(
+        &env,
+        program_id.clone(),
+        10_000_000_000,
+        release_time,
+        recipient1.clone(),
+    );
+    contract.create_program_release_schedule(
+        &env,
+        program_id.clone(),
+        20_000_000_000,
+        release_time,
+        recipient2.clone(),
+    );
+
+    contract.set_program_claim_window(&env, program_id.clone(), 3600);
+
+    // Only authorize and claim schedule 1
+    contract.authorize_program_schedule_claim(&env, program_id.clone(), 1);
+    contract.claim_program_schedule(&env, program_id.clone(), 1);
+
+    // Schedule 2 should be untouched
+    let schedule2 = contract.get_program_release_schedule(&env, program_id.clone(), 2);
+    assert!(!schedule2.released);
+    assert_eq!(schedule2.amount, 20_000_000_000);
+
+    // Remaining balance should only be reduced by schedule 1's amount
+    let remaining = contract.get_remaining_balance(&env, program_id);
+    assert_eq!(remaining, 90_000_000_000);
+}

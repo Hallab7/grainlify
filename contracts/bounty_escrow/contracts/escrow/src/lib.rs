@@ -93,7 +93,8 @@ mod test_bounty_escrow;
 use events::{
     emit_batch_funds_locked, emit_batch_funds_released, emit_bounty_initialized, emit_funds_locked,
     emit_funds_refunded, emit_funds_released, BatchFundsLocked, BatchFundsReleased,
-    BountyEscrowInitialized, FundsLocked, FundsRefunded, FundsReleased,
+    BountyEscrowInitialized, ClaimCancelled, ClaimCreated, ClaimExecuted, FundsLocked,
+    FundsRefunded, FundsReleased,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, vec, Address, Env,
@@ -519,6 +520,25 @@ pub struct RefundApproval {
     pub approved_at: u64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimRecord {
+    pub bounty_id: u64,
+    pub recipient: Address,
+    pub amount: i128,
+    pub expires_at: u64,
+    pub claimed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClaimStatus {
+    Pending,
+    Claimed,
+    Cancelled,
+    Expired,
+}
+
 /// Complete escrow record for a bounty.
 ///
 /// # Fields
@@ -595,6 +615,22 @@ const BASIS_POINTS: i128 = 10_000;
 const MAX_FEE_RATE: i128 = 1_000; // Maximum 10% fee
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultisigConfig {
+    pub threshold_amount: i128,
+    pub signers: Vec<Address>,
+    pub required_signatures: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseApproval {
+    pub bounty_id: u64,
+    pub contributor: Address,
+    pub approvals: Vec<Address>,
+}
+
+#[contracttype]
 pub enum DataKey {
     Admin,
     Token,
@@ -602,6 +638,10 @@ pub enum DataKey {
     FeeConfig,           // Fee configuration
     RefundApproval(u64), // bounty_id -> RefundApproval
     ReentrancyGuard,
+    MultisigConfig,
+    ReleaseApproval(u64), // bounty_id -> ReleaseApproval
+    PendingClaim(u64),    // bounty_id -> ClaimRecord
+    ClaimWindow,          // u64 seconds (global config)
 }
 
 // ============================================================================
@@ -678,6 +718,16 @@ impl BountyEscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::FeeConfig, &fee_config);
+
+        // Initialize multisig config (disabled by default)
+        let multisig_config = MultisigConfig {
+            threshold_amount: i128::MAX,
+            signers: vec![&env],
+            required_signatures: 0,
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::MultisigConfig, &multisig_config);
 
         // Emit initialization event
         emit_bounty_initialized(
@@ -785,6 +835,109 @@ impl BountyEscrowContract {
     /// Get current fee configuration (view function)
     pub fn get_fee_config(env: Env) -> FeeConfig {
         Self::get_fee_config_internal(&env)
+    }
+
+    /// Update multisig configuration (admin only)
+    pub fn update_multisig_config(
+        env: Env,
+        threshold_amount: i128,
+        signers: Vec<Address>,
+        required_signatures: u32,
+    ) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if required_signatures > signers.len() {
+            return Err(Error::InvalidAmount);
+        }
+
+        let config = MultisigConfig {
+            threshold_amount,
+            signers,
+            required_signatures,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::MultisigConfig, &config);
+
+        Ok(())
+    }
+
+    /// Get multisig configuration
+    pub fn get_multisig_config(env: Env) -> MultisigConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::MultisigConfig)
+            .unwrap_or(MultisigConfig {
+                threshold_amount: i128::MAX,
+                signers: vec![&env],
+                required_signatures: 0,
+            })
+    }
+
+    /// Approve release for large amount (requires multisig)
+    pub fn approve_large_release(
+        env: Env,
+        bounty_id: u64,
+        contributor: Address,
+        approver: Address,
+    ) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+
+        let multisig_config: MultisigConfig = Self::get_multisig_config(env.clone());
+
+        let mut is_signer = false;
+        for signer in multisig_config.signers.iter() {
+            if signer == approver {
+                is_signer = true;
+                break;
+            }
+        }
+
+        if !is_signer {
+            return Err(Error::Unauthorized);
+        }
+
+        approver.require_auth();
+
+        let approval_key = DataKey::ReleaseApproval(bounty_id);
+        let mut approval: ReleaseApproval = env
+            .storage()
+            .persistent()
+            .get(&approval_key)
+            .unwrap_or(ReleaseApproval {
+                bounty_id,
+                contributor: contributor.clone(),
+                approvals: vec![&env],
+            });
+
+        for existing in approval.approvals.iter() {
+            if existing == approver {
+                return Ok(());
+            }
+        }
+
+        approval.approvals.push_back(approver.clone());
+        env.storage().persistent().set(&approval_key, &approval);
+
+        events::emit_approval_added(
+            &env,
+            events::ApprovalAdded {
+                bounty_id,
+                contributor: contributor.clone(),
+                approver,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
     }
 
     /// Lock funds for a specific bounty.
@@ -1032,8 +1185,6 @@ impl BountyEscrowContract {
         // Apply rate limiting
         anti_abuse::check_rate_limit(&env, admin.clone());
 
-        admin.require_auth();
-
         // Verify bounty exists
         if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
             monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
@@ -1052,6 +1203,34 @@ impl BountyEscrowContract {
             monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
             env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::FundsNotLocked);
+        }
+
+        // Check if multisig approval is required
+        let multisig_config: MultisigConfig = Self::get_multisig_config(env.clone());
+
+        if escrow.amount >= multisig_config.threshold_amount
+            && multisig_config.required_signatures > 0
+        {
+            // Large release - requires multisig approval
+            let approval_key = DataKey::ReleaseApproval(bounty_id);
+
+            if !env.storage().persistent().has(&approval_key) {
+                env.storage().instance().remove(&DataKey::ReentrancyGuard);
+                return Err(Error::Unauthorized);
+            }
+
+            let approval: ReleaseApproval = env.storage().persistent().get(&approval_key).unwrap();
+
+            if approval.approvals.len() < multisig_config.required_signatures {
+                env.storage().instance().remove(&DataKey::ReentrancyGuard);
+                return Err(Error::Unauthorized);
+            }
+
+            // Clear approval after use
+            env.storage().persistent().remove(&approval_key);
+        } else {
+            // Small release - single admin approval
+            admin.require_auth();
         }
 
         // Transfer funds to contributor
@@ -1120,6 +1299,184 @@ impl BountyEscrowContract {
         let duration = env.ledger().timestamp().saturating_sub(start);
         monitoring::emit_performance(&env, symbol_short!("release"), duration);
         Ok(())
+    }
+
+    /// Set the claim window duration (admin only).
+    /// claim_window: seconds beneficiary has to claim after release is authorized.
+    pub fn set_claim_window(env: Env, claim_window: u64) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::ClaimWindow, &claim_window);
+        Ok(())
+    }
+
+    /// Authorize a release as a pending claim instead of immediate transfer.
+    /// Admin calls this instead of release_funds when claim period is active.
+    /// Beneficiary must call claim() within the window to receive funds.
+    pub fn authorize_claim(env: Env, bounty_id: u64, recipient: Address) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            return Err(Error::BountyNotFound);
+        }
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+        if escrow.status != EscrowStatus::Locked {
+            return Err(Error::FundsNotLocked);
+        }
+
+        let claim_window: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ClaimWindow)
+            .unwrap_or(86400); // 24h default
+        let now = env.ledger().timestamp();
+        let claim = ClaimRecord {
+            bounty_id,
+            recipient: recipient.clone(),
+            amount: escrow.amount,
+            expires_at: now.saturating_add(claim_window),
+            claimed: false,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingClaim(bounty_id), &claim);
+
+        env.events().publish(
+            (symbol_short!("claim"), symbol_short!("created")),
+            ClaimCreated {
+                bounty_id,
+                recipient,
+                amount: escrow.amount,
+                expires_at: claim.expires_at,
+            },
+        );
+        Ok(())
+    }
+
+    /// Beneficiary calls this to claim their authorized funds within the window.
+    pub fn claim(env: Env, bounty_id: u64) -> Result<(), Error> {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PendingClaim(bounty_id))
+        {
+            return Err(Error::BountyNotFound);
+        }
+        let mut claim: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingClaim(bounty_id))
+            .unwrap();
+
+        claim.recipient.require_auth();
+
+        let now = env.ledger().timestamp();
+        if now > claim.expires_at {
+            return Err(Error::DeadlineNotPassed); // reuse or add ClaimExpired error
+        }
+        if claim.claimed {
+            return Err(Error::FundsNotLocked);
+        }
+
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let client = token::Client::new(&env, &token_addr);
+        client.transfer(
+            &env.current_contract_address(),
+            &claim.recipient,
+            &claim.amount,
+        );
+
+        // Update escrow status
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+        escrow.status = EscrowStatus::Released;
+        escrow.remaining_amount = 0;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(bounty_id), &escrow);
+
+        claim.claimed = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingClaim(bounty_id), &claim);
+
+        env.events().publish(
+            (symbol_short!("claim"), symbol_short!("done")),
+            ClaimExecuted {
+                bounty_id,
+                recipient: claim.recipient.clone(),
+                amount: claim.amount,
+                claimed_at: now,
+            },
+        );
+        Ok(())
+    }
+
+    /// Admin can cancel an expired or unwanted pending claim, returning escrow to Locked.
+    pub fn cancel_pending_claim(env: Env, bounty_id: u64) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PendingClaim(bounty_id))
+        {
+            return Err(Error::BountyNotFound);
+        }
+        let claim: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingClaim(bounty_id))
+            .unwrap();
+
+        if claim.claimed {
+            return Err(Error::FundsNotLocked);
+        }
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingClaim(bounty_id));
+
+        env.events().publish(
+            (symbol_short!("claim"), symbol_short!("cancel")),
+            ClaimCancelled {
+                bounty_id,
+                recipient: claim.recipient,
+                amount: claim.amount,
+                cancelled_at: env.ledger().timestamp(),
+                cancelled_by: admin,
+            },
+        );
+        Ok(())
+    }
+
+    /// View: get pending claim for a bounty.
+    pub fn get_pending_claim(env: Env, bounty_id: u64) -> Result<ClaimRecord, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PendingClaim(bounty_id))
+            .ok_or(Error::BountyNotFound)
     }
 
     /// Approve a refund before deadline (admin only).
