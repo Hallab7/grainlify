@@ -1600,12 +1600,9 @@ fn test_multi_bounty_refund_one_does_not_affect_other() {
     setup.env.ledger().set_timestamp(deadline + 1);
 
     // Refund only bounty 1
-    setup.escrow.refund(
-        &1,
-        &None::<i128>,
-        &None::<Address>,
-        &RefundMode::Full,
-    );
+    setup
+        .escrow
+        .refund(&1, &None::<i128>, &None::<Address>, &RefundMode::Full);
 
     // Bounty 1: refunded; bounty 2: unchanged
     let e1_after = setup.escrow.get_escrow_info(&1);
@@ -1618,7 +1615,10 @@ fn test_multi_bounty_refund_one_does_not_affect_other() {
     // Contract still holds bounty 2's amount
     assert_eq!(setup.token.balance(&setup.escrow_address), 2000);
     // Depositor: initial - 3000 (locked) + 1000 (refunded) = initial - 2000
-    assert_eq!(setup.token.balance(&setup.depositor), initial_balance - 2000);
+    assert_eq!(
+        setup.token.balance(&setup.depositor),
+        initial_balance - 2000
+    );
 }
 
 #[test]
@@ -1629,11 +1629,17 @@ fn test_multi_bounty_lock_and_release_independent_balance_maps() {
 
     // TestSetup already mints 1_000_000 to depositor
     let depositor_initial = setup.token.balance(&setup.depositor);
-    assert!(depositor_initial >= 4000, "Depositor needs at least 4000 tokens");
+    assert!(
+        depositor_initial >= 4000,
+        "Depositor needs at least 4000 tokens"
+    );
 
     // Verify contributor2 starts with 0 balance
     let contributor2_initial = setup.token.balance(&contributor2);
-    assert_eq!(contributor2_initial, 0, "Contributor2 should start with 0 balance");
+    assert_eq!(
+        contributor2_initial, 0,
+        "Contributor2 should start with 0 balance"
+    );
 
     // Lock two bounties
     setup
@@ -1669,7 +1675,10 @@ fn test_multi_bounty_lock_and_release_independent_balance_maps() {
     assert_eq!(escrow2_after.remaining_amount, 2500);
     assert_eq!(escrow2_after.status, EscrowStatus::Locked);
     assert_eq!(contributor_balance, 1500, "Contributor should have 1500");
-    assert_eq!(contract_balance_after_1, 2500, "Contract should have 2500 remaining");
+    assert_eq!(
+        contract_balance_after_1, 2500,
+        "Contract should have 2500 remaining"
+    );
 
     // Release bounty 2 to different contributor
     setup.escrow.release_funds(&2, &contributor2);
@@ -1679,10 +1688,23 @@ fn test_multi_bounty_lock_and_release_independent_balance_maps() {
     let contributor2_balance = setup.token.balance(&contributor2);
     let escrow_final_balance = setup.token.balance(&setup.escrow_address);
 
-    assert_eq!(escrow2_final.remaining_amount, 0, "Escrow2 remaining_amount should be 0 after release");
-    assert_eq!(escrow2_final.status, EscrowStatus::Released, "Escrow2 should be Released");
-    assert_eq!(contributor2_balance, 2500, "Contributor2 should have received 2500");
-    assert_eq!(escrow_final_balance, 0, "Contract should have 0 balance after all releases");
+    assert_eq!(
+        escrow2_final.remaining_amount, 0,
+        "Escrow2 remaining_amount should be 0 after release"
+    );
+    assert_eq!(
+        escrow2_final.status,
+        EscrowStatus::Released,
+        "Escrow2 should be Released"
+    );
+    assert_eq!(
+        contributor2_balance, 2500,
+        "Contributor2 should have received 2500"
+    );
+    assert_eq!(
+        escrow_final_balance, 0,
+        "Contract should have 0 balance after all releases"
+    );
 }
 
 // ============================================================================
