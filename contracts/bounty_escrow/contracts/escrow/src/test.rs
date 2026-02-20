@@ -1627,7 +1627,15 @@ fn test_multi_bounty_lock_and_release_independent_balance_maps() {
     let contributor2 = Address::generate(&setup.env);
     let deadline = setup.env.ledger().timestamp() + 10_000;
 
-    setup.token_admin.mint(&setup.depositor, &10_000);
+    // TestSetup already mints 1_000_000 to depositor
+    let depositor_initial = setup.token.balance(&setup.depositor);
+    println!("Initial depositor balance: {}", depositor_initial);
+    assert!(depositor_initial >= 4000, "Depositor needs at least 4000 tokens");
+
+    // Verify contributor2 starts with 0 balance
+    let contributor2_initial = setup.token.balance(&contributor2);
+    println!("Initial contributor2 balance: {}", contributor2_initial);
+    assert_eq!(contributor2_initial, 0, "Contributor2 should start with 0 balance");
 
     // Lock two bounties
     setup
@@ -1637,25 +1645,59 @@ fn test_multi_bounty_lock_and_release_independent_balance_maps() {
         .escrow
         .lock_funds(&setup.depositor, &2, &2500, &deadline);
 
-    assert_eq!(setup.escrow.get_escrow_info(&1).remaining_amount, 1500);
-    assert_eq!(setup.escrow.get_escrow_info(&2).remaining_amount, 2500);
-    assert_eq!(setup.escrow.get_balance(), 4000);
+    // Verify escrow state after locking
+    let escrow1 = setup.escrow.get_escrow_info(&1);
+    let escrow2 = setup.escrow.get_escrow_info(&2);
+    println!("After lock - Escrow1 amount: {}, remaining: {}", escrow1.amount, escrow1.remaining_amount);
+    println!("After lock - Escrow2 amount: {}, remaining: {}", escrow2.amount, escrow2.remaining_amount);
+
+    // Verify escrow.amount is correct (this is what gets transferred on release)
+    assert_eq!(escrow1.amount, 1500, "Escrow1 amount should be 1500");
+    assert_eq!(escrow2.amount, 2500, "Escrow2 amount should be 2500");
+    assert_eq!(escrow1.remaining_amount, 1500);
+    assert_eq!(escrow2.remaining_amount, 2500);
+
+    let contract_balance = setup.token.balance(&setup.escrow_address);
+    println!("After lock - Contract token balance: {}", contract_balance);
+    assert_eq!(contract_balance, 4000, "Contract should hold 4000 tokens");
 
     // Release bounty 1 only
     setup.escrow.release_funds(&1, &setup.contributor);
 
-    // remaining_amount and status correct per bounty; operation on bounty 1 did not affect bounty 2
-    assert_eq!(setup.escrow.get_escrow_info(&1).remaining_amount, 0);
-    assert_eq!(setup.escrow.get_escrow_info(&1).status, EscrowStatus::Released);
-    assert_eq!(setup.escrow.get_escrow_info(&2).remaining_amount, 2500);
-    assert_eq!(setup.escrow.get_escrow_info(&2).status, EscrowStatus::Locked);
+    let escrow1_after = setup.escrow.get_escrow_info(&1);
+    let escrow2_after = setup.escrow.get_escrow_info(&2);
+    let contributor_balance = setup.token.balance(&setup.contributor);
+    let contract_balance_after_1 = setup.token.balance(&setup.escrow_address);
 
-    assert_eq!(setup.token.balance(&setup.contributor), 1500);
+    println!("After release 1 - Escrow1 remaining: {}, status: {:?}", escrow1_after.remaining_amount, escrow1_after.status);
+    println!("After release 1 - Escrow2 remaining: {}, status: {:?}, amount: {}", escrow2_after.remaining_amount, escrow2_after.status, escrow2_after.amount);
+    println!("After release 1 - Contributor balance: {}", contributor_balance);
+    println!("After release 1 - Contract token balance: {}", contract_balance_after_1);
+
+    assert_eq!(escrow1_after.remaining_amount, 0);
+    assert_eq!(escrow1_after.status, EscrowStatus::Released);
+    assert_eq!(escrow2_after.remaining_amount, 2500);
+    assert_eq!(escrow2_after.status, EscrowStatus::Locked);
+    assert_eq!(contributor_balance, 1500, "Contributor should have 1500");
+    assert_eq!(contract_balance_after_1, 2500, "Contract should have 2500 remaining");
 
     // Release bounty 2 to different contributor
+    // Verify escrow2.amount before release (this is what will be transferred)
+    println!("Before release 2 - Escrow2 amount to be transferred: {}", escrow2_after.amount);
+
     setup.escrow.release_funds(&2, &contributor2);
-    assert_eq!(setup.escrow.get_escrow_info(&2).remaining_amount, 0);
-    assert_eq!(setup.escrow.get_escrow_info(&2).status, EscrowStatus::Released);
-    assert_eq!(setup.token.balance(&contributor2), 2500);
-    assert_eq!(setup.token.balance(&setup.escrow_address), 0);
+
+    // Capture final state
+    let escrow2_final = setup.escrow.get_escrow_info(&2);
+    let contributor2_balance = setup.token.balance(&contributor2);
+    let escrow_final_balance = setup.token.balance(&setup.escrow_address);
+
+    println!("After release 2 - Escrow2 remaining: {}, status: {:?}", escrow2_final.remaining_amount, escrow2_final.status);
+    println!("After release 2 - Contributor2 balance: {}", contributor2_balance);
+    println!("After release 2 - Escrow contract balance: {}", escrow_final_balance);
+
+    assert_eq!(escrow2_final.remaining_amount, 0, "Escrow2 remaining_amount should be 0 after release");
+    assert_eq!(escrow2_final.status, EscrowStatus::Released, "Escrow2 should be Released");
+    assert_eq!(contributor2_balance, 2500, "Contributor2 should have received 2500");
+    assert_eq!(escrow_final_balance, 0, "Contract should have 0 balance after all releases");
 }
