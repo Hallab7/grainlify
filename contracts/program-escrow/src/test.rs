@@ -323,3 +323,16 @@ fn test_release_schedule_overlapping_schedules() {
     let history = client.get_program_release_history();
     assert_eq!(history.len(), 3);
 }
+
+// =============================================================================
+// TESTS FOR MULTI-TENANT ISOLATION
+// =============================================================================
+
+// Note: Comprehensive multi-tenant isolation tests are implemented in lib.rs
+// using the ProgramEscrowContractClient for proper integration testing.
+// The tests verify:
+// - Funds and balance isolation between programs
+// - Payout history isolation
+// - Release schedule isolation
+// - Release history isolation
+// - Analytics isolation concepts (for future program-specific analytics)
