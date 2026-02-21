@@ -389,7 +389,6 @@ pub struct Escrow {
     pub status: EscrowStatus,
     pub deadline: u64,
     pub refund_history: Vec<RefundRecord>,
-    pub remaining_amount: i128,
 }
 
 #[contracttype]
