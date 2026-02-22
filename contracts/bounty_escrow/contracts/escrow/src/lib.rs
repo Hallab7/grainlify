@@ -1281,6 +1281,7 @@ impl BountyEscrowContract {
         emit_funds_released(
             &env,
             FundsReleased {
+                version: EVENT_VERSION_V2,
                 bounty_id,
                 amount: payout_amount,
                 recipient: contributor.clone(),
