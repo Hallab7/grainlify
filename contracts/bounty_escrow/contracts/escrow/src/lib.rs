@@ -1543,7 +1543,7 @@ impl BountyEscrowContract {
                     if skipped < offset {
                         skipped += 1;
                         continue;
-                    }
+               git merge upstream/master     }
                     results.push_back(EscrowWithId { bounty_id, escrow });
                     count += 1;
                 }
