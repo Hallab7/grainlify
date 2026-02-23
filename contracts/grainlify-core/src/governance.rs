@@ -367,4 +367,50 @@ mod test {
 
         assert_eq!(status, ProposalStatus::Rejected);
     }
+
+    #[test]
+    fn test_vote_ordering_for_against_then_for_for_is_approved() {
+        let env = Env::default();
+        let (client, _, proposer) = setup_test(&env);
+        let voter_for_1 = Address::generate(&env);
+        let voter_for_2 = Address::generate(&env);
+        let voter_against = Address::generate(&env);
+
+        let proposal_id = client.create_proposal(
+            &proposer,
+            &BytesN::from_array(&env, &[1u8; 32]),
+            &symbol_short!("ordera"),
+        );
+
+        client.cast_vote(&voter_against, &proposal_id, &VoteType::Against);
+        client.cast_vote(&voter_for_1, &proposal_id, &VoteType::For);
+        client.cast_vote(&voter_for_2, &proposal_id, &VoteType::For);
+
+        env.ledger().with_mut(|li| li.timestamp = 200);
+        let status = client.finalize_proposal(&proposal_id);
+        assert_eq!(status, ProposalStatus::Approved);
+    }
+
+    #[test]
+    fn test_vote_ordering_for_for_then_against_is_approved() {
+        let env = Env::default();
+        let (client, _, proposer) = setup_test(&env);
+        let voter_for_1 = Address::generate(&env);
+        let voter_for_2 = Address::generate(&env);
+        let voter_against = Address::generate(&env);
+
+        let proposal_id = client.create_proposal(
+            &proposer,
+            &BytesN::from_array(&env, &[2u8; 32]),
+            &symbol_short!("orderb"),
+        );
+
+        client.cast_vote(&voter_for_1, &proposal_id, &VoteType::For);
+        client.cast_vote(&voter_for_2, &proposal_id, &VoteType::For);
+        client.cast_vote(&voter_against, &proposal_id, &VoteType::Against);
+
+        env.ledger().with_mut(|li| li.timestamp = 200);
+        let status = client.finalize_proposal(&proposal_id);
+        assert_eq!(status, ProposalStatus::Approved);
+    }
 }
