@@ -315,7 +315,7 @@ fn test_trigger_releases_normal_execution() {
     client.lock_program_funds(&amount);
 
     // Create schedule
-    client.create_program_release_schedule(&recipient, &amount, &release_timestamp);
+    client.create_program_release_schedule(&amount, &release_timestamp, &recipient);
 
     // Advance time
     env.ledger().set_timestamp(release_timestamp + 1);
@@ -351,7 +351,7 @@ fn test_trigger_releases_blocks_reentrancy() {
     client.lock_program_funds(&amount);
 
     // Create schedule
-    client.create_program_release_schedule(&recipient, &amount, &release_timestamp);
+    client.create_program_release_schedule(&amount, &release_timestamp, &recipient);
 
     // Advance time
     env.ledger().set_timestamp(release_timestamp + 1);

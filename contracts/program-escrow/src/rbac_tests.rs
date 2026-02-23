@@ -67,7 +67,7 @@ fn test_admin_permissions() {
     
     // Admin should be able to pause/unpause
     setup.env.mock_all_auths();
-    setup.client.set_paused(&Some(true), &None, &None);
+    setup.client.set_paused(&Some(true), &None, &None, &None);
     assert!(setup.client.get_pause_flags().lock_paused);
 }
 
@@ -75,7 +75,7 @@ fn test_admin_permissions() {
 #[should_panic]
 fn test_random_cannot_pause() {
     let setup = RbacSetup::new();
-    setup.client.set_paused(&Some(true), &None, &None);
+    setup.client.set_paused(&Some(true), &None, &None, &None);
     // This should panic because the default caller in Soroban tests (without mock_all_auths) 
     // will be unauthorized if it hasn't call setup.env.mock_all_auths() or provided auth.
 }

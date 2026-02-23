@@ -306,6 +306,7 @@ const BATCH_PAYOUT: Symbol = symbol_short!("BatchPay");
 const PAYOUT: Symbol = symbol_short!("Payout");
 const EVENT_VERSION_V2: u32 = 2;
 const PAUSE_STATE_CHANGED: Symbol = symbol_short!("PauseSt");
+const PROGRAM_REGISTERED: Symbol = symbol_short!("PrgReg");
 
 // Storage keys
 const PROGRAM_DATA: Symbol = symbol_short!("ProgData");
@@ -314,6 +315,9 @@ const RELEASE_HISTORY: Symbol = symbol_short!("RelHist");
 const NEXT_SCHEDULE_ID: Symbol = symbol_short!("NxtSched");
 const PROGRAM_INDEX: Symbol = symbol_short!("ProgIdx");
 const AUTH_KEY_INDEX: Symbol = symbol_short!("AuthIdx");
+const PROGRAM_REGISTRY: Symbol = symbol_short!("ProgReg2");
+const FEE_CONFIG: Symbol = symbol_short!("FeeConf");
+const BASIS_POINTS: i128 = 10_000;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -461,9 +465,20 @@ pub struct ProgramReleaseHistory {
 pub struct ProgramAggregateStats {
     pub total_funds: i128,
     pub remaining_balance: i128,
-    pub authorized_payout_key: Address,
-    pub payout_history: Vec<PayoutRecord>,
-    pub token_address: Address,
+    pub total_paid_out: i128,
+    pub payout_count: u32,
+    pub scheduled_count: u32,
+    pub released_count: u32,
+}
+
+/// Fee configuration for the program escrow.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeConfig {
+    pub lock_fee_rate: i128,
+    pub payout_fee_rate: i128,
+    pub fee_recipient: Address,
+    pub fee_enabled: bool,
 }
 
 /// Input item for batch program registration.
@@ -486,20 +501,6 @@ pub enum BatchError {
     InvalidBatchSize = 1,
     ProgramAlreadyExists = 2,
     DuplicateProgramId = 3,
-}
-
-/// Storage key type for individual programs
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum DataKey {
-    Program(String),                 // program_id -> ProgramData
-    ReleaseSchedule(String, u64),    // program_id, schedule_id -> ProgramReleaseSchedule
-    ReleaseHistory(String),          // program_id -> Vec<ProgramReleaseHistory>
-    NextScheduleId(String),          // program_id -> next schedule_id
-    MultisigConfig(String),          // program_id -> MultisigConfig
-    PayoutApproval(String, Address), // program_id, recipient -> PayoutApproval
-    PendingClaim(String, u64),       // (program_id, schedule_id) -> ClaimRecord
-    ClaimWindow,                     // u64 seconds (global config)
 }
 
 #[contracttype]
@@ -701,12 +702,18 @@ impl ProgramEscrowContract {
                 fee_enabled: false,
             })
     }
-    /// Check if a program exists
+    /// Check if a program exists (legacy single-program check)
     ///
     /// # Returns
     /// * `bool` - True if program exists, false otherwise
     pub fn program_exists(env: Env) -> bool {
         env.storage().instance().has(&PROGRAM_DATA)
+    }
+
+    /// Check if a specific program exists by ID (multi-tenant)
+    pub fn program_exists_by_id(env: Env, program_id: String) -> bool {
+        let program_key = DataKey::Program(program_id);
+        env.storage().instance().has(&program_key)
     }
 
     // ========================================================================
@@ -1312,6 +1319,10 @@ impl ProgramEscrowContract {
             .instance()
             .get(&SCHEDULES)
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    pub fn get_program_release_schedules(env: Env) -> Vec<ProgramReleaseSchedule> {
+        Self::get_release_schedules(env)
     }
 
     pub fn get_program_release_history(env: Env) -> Vec<ProgramReleaseHistory> {
