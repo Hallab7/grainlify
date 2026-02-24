@@ -480,11 +480,17 @@ fn test_retry_exhaustion_opens_circuit() {
         );
         let prog = String::from_str(&env, "TestProg");
         let op = symbol_short!("op");
-        let retry_cfg = RetryConfig { max_attempts: 3 };
+        let retry_cfg = RetryConfig {
+            max_attempts: 3,
+            initial_backoff: 0,
+            backoff_multiplier: 1,
+            max_backoff: 0,
+        };
         let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
         assert!(!result.succeeded);
         assert_eq!(result.attempts, 3);
         assert_eq!(result.final_error, ERR_TRANSFER_FAILED);
+        assert_eq!(result.total_delay, 0);
         assert_eq!(get_state(&env), CircuitState::Open);
     });
 }
@@ -497,11 +503,17 @@ fn test_retry_circuit_open_stops_immediately() {
         assert_eq!(get_state(&env), CircuitState::Open);
         let prog = String::from_str(&env, "TestProg");
         let op = symbol_short!("op");
-        let retry_cfg = RetryConfig { max_attempts: 5 };
+        let retry_cfg = RetryConfig {
+            max_attempts: 5,
+            initial_backoff: 0,
+            backoff_multiplier: 1,
+            max_backoff: 0,
+        };
         let result = execute_with_retry(&env, &retry_cfg, prog, op, || Ok(()));
         assert!(!result.succeeded);
         assert_eq!(result.attempts, 0);
         assert_eq!(result.final_error, ERR_CIRCUIT_OPEN);
+        assert_eq!(result.total_delay, 0);
     });
 }
 
@@ -525,7 +537,12 @@ fn test_retry_success_on_second_attempt_resets_failures() {
         );
         let prog = String::from_str(&env, "TestProg");
         let op = symbol_short!("op");
-        let retry_cfg = RetryConfig { max_attempts: 3 };
+        let retry_cfg = RetryConfig {
+            max_attempts: 3,
+            initial_backoff: 0,
+            backoff_multiplier: 1,
+            max_backoff: 0,
+        };
         let mut call_count = 0u32;
         let result = execute_with_retry(&env, &retry_cfg, prog, op, || {
             call_count += 1;
@@ -827,4 +844,658 @@ fn test_interleaved_failures_and_successes_do_not_open_if_never_hit_threshold() 
 
         assert_eq!(get_state(&env), CircuitState::Closed);
     });
+}
+
+// ─────────────────────────────────────────────────────────
+// 19. Retry policy presets and backoff computation
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_retry_config_default_preset() {
+    let config = RetryConfig::default();
+    assert_eq!(config.max_attempts, 3);
+    assert_eq!(config.initial_backoff, 0);
+    assert_eq!(config.backoff_multiplier, 1);
+    assert_eq!(config.max_backoff, 0);
+}
+
+#[test]
+fn test_retry_config_aggressive_preset() {
+    let config = RetryConfig::aggressive();
+    assert_eq!(config.max_attempts, 5);
+    assert_eq!(config.initial_backoff, 1);
+    assert_eq!(config.backoff_multiplier, 1);
+    assert_eq!(config.max_backoff, 5);
+}
+
+#[test]
+fn test_retry_config_conservative_preset() {
+    let config = RetryConfig::conservative();
+    assert_eq!(config.max_attempts, 3);
+    assert_eq!(config.initial_backoff, 10);
+    assert_eq!(config.backoff_multiplier, 2);
+    assert_eq!(config.max_backoff, 100);
+}
+
+#[test]
+fn test_retry_config_exponential_preset() {
+    let config = RetryConfig::exponential();
+    assert_eq!(config.max_attempts, 4);
+    assert_eq!(config.initial_backoff, 5);
+    assert_eq!(config.backoff_multiplier, 3);
+    assert_eq!(config.max_backoff, 200);
+}
+
+// ─────────────────────────────────────────────────────────
+// 20. Backoff delay computation tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_compute_backoff_no_delay() {
+    let config = RetryConfig::default();
+    assert_eq!(config.compute_backoff(0), 0);
+    assert_eq!(config.compute_backoff(1), 0);
+    assert_eq!(config.compute_backoff(5), 0);
+}
+
+#[test]
+fn test_compute_backoff_constant_delay() {
+    let config = RetryConfig::aggressive();
+    // Constant backoff: multiplier = 1
+    assert_eq!(config.compute_backoff(0), 1); // 1 * 1^0 = 1
+    assert_eq!(config.compute_backoff(1), 1); // 1 * 1^1 = 1
+    assert_eq!(config.compute_backoff(2), 1); // 1 * 1^2 = 1
+    assert_eq!(config.compute_backoff(3), 1); // 1 * 1^3 = 1
+}
+
+#[test]
+fn test_compute_backoff_exponential_growth() {
+    let config = RetryConfig::conservative();
+    // Exponential backoff: initial=10, multiplier=2
+    assert_eq!(config.compute_backoff(0), 10);  // 10 * 2^0 = 10
+    assert_eq!(config.compute_backoff(1), 20);  // 10 * 2^1 = 20
+    assert_eq!(config.compute_backoff(2), 40);  // 10 * 2^2 = 40
+    assert_eq!(config.compute_backoff(3), 80);  // 10 * 2^3 = 80
+}
+
+#[test]
+fn test_compute_backoff_capped_at_max() {
+    let config = RetryConfig::conservative();
+    // Should cap at max_backoff = 100
+    assert_eq!(config.compute_backoff(4), 100); // 10 * 2^4 = 160, capped to 100
+    assert_eq!(config.compute_backoff(5), 100); // 10 * 2^5 = 320, capped to 100
+}
+
+#[test]
+fn test_compute_backoff_exponential_preset() {
+    let config = RetryConfig::exponential();
+    // Exponential backoff: initial=5, multiplier=3
+    assert_eq!(config.compute_backoff(0), 5);   // 5 * 3^0 = 5
+    assert_eq!(config.compute_backoff(1), 15);  // 5 * 3^1 = 15
+    assert_eq!(config.compute_backoff(2), 45);  // 5 * 3^2 = 45
+    assert_eq!(config.compute_backoff(3), 135); // 5 * 3^3 = 135
+    assert_eq!(config.compute_backoff(4), 200); // 5 * 3^4 = 405, capped to 200
+}
+
+// ─────────────────────────────────────────────────────────
+// 21. Aggressive policy behavior tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_aggressive_policy_max_attempts() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::aggressive();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        assert!(!result.succeeded);
+        assert_eq!(result.attempts, 5, "Aggressive policy should attempt 5 times");
+        assert_eq!(result.final_error, ERR_TRANSFER_FAILED);
+    });
+}
+
+#[test]
+fn test_aggressive_policy_minimal_backoff() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::aggressive();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        // Aggressive: constant backoff of 1, 4 retries (attempts 2-5)
+        // Total delay = 1 + 1 + 1 + 1 = 4
+        assert_eq!(result.total_delay, 4, "Aggressive policy should have minimal total delay");
+    });
+}
+
+#[test]
+fn test_aggressive_policy_succeeds_on_last_attempt() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::aggressive();
+        let mut call_count = 0u32;
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || {
+            call_count += 1;
+            if call_count < 5 {
+                Err(ERR_TRANSFER_FAILED)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.succeeded);
+        assert_eq!(result.attempts, 5);
+        assert_eq!(result.final_error, 0);
+    });
+}
+
+// ─────────────────────────────────────────────────────────
+// 22. Conservative policy behavior tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_conservative_policy_max_attempts() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::conservative();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        assert!(!result.succeeded);
+        assert_eq!(result.attempts, 3, "Conservative policy should attempt 3 times");
+        assert_eq!(result.final_error, ERR_TRANSFER_FAILED);
+    });
+}
+
+#[test]
+fn test_conservative_policy_exponential_backoff() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::conservative();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        // Conservative: exponential backoff 10, 20 (2 retries for attempts 2-3)
+        // Total delay = 10 + 20 = 30
+        assert_eq!(result.total_delay, 30, "Conservative policy should have exponential backoff");
+    });
+}
+
+#[test]
+fn test_conservative_policy_succeeds_early() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::conservative();
+        let mut call_count = 0u32;
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || {
+            call_count += 1;
+            if call_count < 2 {
+                Err(ERR_TRANSFER_FAILED)
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.succeeded);
+        assert_eq!(result.attempts, 2);
+        // Only one retry, so delay = 10
+        assert_eq!(result.total_delay, 10);
+    });
+}
+
+// ─────────────────────────────────────────────────────────
+// 23. Exponential policy behavior tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_exponential_policy_max_attempts() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::exponential();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        assert!(!result.succeeded);
+        assert_eq!(result.attempts, 4, "Exponential policy should attempt 4 times");
+    });
+}
+
+#[test]
+fn test_exponential_policy_strong_backoff() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::exponential();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        // Exponential: 5, 15, 45 (3 retries for attempts 2-4)
+        // Total delay = 5 + 15 + 45 = 65
+        assert_eq!(result.total_delay, 65, "Exponential policy should have strong backoff growth");
+    });
+}
+
+// ─────────────────────────────────────────────────────────
+// 24. Policy comparison tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_policy_comparison_attempt_counts() {
+    let aggressive = RetryConfig::aggressive();
+    let conservative = RetryConfig::conservative();
+    let exponential = RetryConfig::exponential();
+    
+    assert_eq!(aggressive.max_attempts, 5, "Aggressive: 5 attempts");
+    assert_eq!(conservative.max_attempts, 3, "Conservative: 3 attempts");
+    assert_eq!(exponential.max_attempts, 4, "Exponential: 4 attempts");
+    
+    assert!(aggressive.max_attempts > conservative.max_attempts);
+    assert!(aggressive.max_attempts > exponential.max_attempts);
+}
+
+#[test]
+fn test_policy_comparison_backoff_sequences() {
+    let aggressive = RetryConfig::aggressive();
+    let conservative = RetryConfig::conservative();
+    let exponential = RetryConfig::exponential();
+    
+    // Compare backoff sequences for first 3 retries
+    // Aggressive: constant 1
+    assert_eq!(aggressive.compute_backoff(0), 1);
+    assert_eq!(aggressive.compute_backoff(1), 1);
+    assert_eq!(aggressive.compute_backoff(2), 1);
+    
+    // Conservative: exponential 10, 20, 40
+    assert_eq!(conservative.compute_backoff(0), 10);
+    assert_eq!(conservative.compute_backoff(1), 20);
+    assert_eq!(conservative.compute_backoff(2), 40);
+    
+    // Exponential: strong growth 5, 15, 45
+    assert_eq!(exponential.compute_backoff(0), 5);
+    assert_eq!(exponential.compute_backoff(1), 15);
+    assert_eq!(exponential.compute_backoff(2), 45);
+    
+    // Verify aggressive has minimal delays
+    assert!(aggressive.compute_backoff(0) < conservative.compute_backoff(0));
+    assert!(aggressive.compute_backoff(1) < conservative.compute_backoff(1));
+    assert!(aggressive.compute_backoff(2) < conservative.compute_backoff(2));
+}
+
+#[test]
+fn test_policy_comparison_total_delays() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 20,
+                success_threshold: 1,
+                max_error_log: 20,
+            },
+        );
+    });
+    
+    // Test aggressive policy
+    let aggressive_delay = env.as_contract(&contract_id, || {
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op_agg");
+        let retry_cfg = RetryConfig::aggressive();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        result.total_delay
+    });
+    
+    // Reset circuit for next test
+    env.as_contract(&contract_id, || {
+        close_circuit(&env);
+    });
+    
+    // Test conservative policy
+    let conservative_delay = env.as_contract(&contract_id, || {
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op_con");
+        let retry_cfg = RetryConfig::conservative();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        result.total_delay
+    });
+    
+    // Aggressive should have much lower total delay
+    assert!(aggressive_delay < conservative_delay, 
+        "Aggressive delay ({}) should be less than conservative delay ({})", 
+        aggressive_delay, conservative_delay);
+}
+
+// ─────────────────────────────────────────────────────────
+// 25. Max retry reached behavior
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_aggressive_policy_max_retries_reached() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::aggressive();
+        let mut call_count = 0u32;
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || {
+            call_count += 1;
+            Err(ERR_TRANSFER_FAILED)
+        });
+        assert!(!result.succeeded);
+        assert_eq!(result.attempts, 5);
+        assert_eq!(call_count, 5, "Should have called operation exactly max_attempts times");
+        assert_eq!(result.final_error, ERR_TRANSFER_FAILED);
+    });
+}
+
+#[test]
+fn test_conservative_policy_max_retries_reached() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::conservative();
+        let mut call_count = 0u32;
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || {
+            call_count += 1;
+            Err(ERR_TRANSFER_FAILED)
+        });
+        assert!(!result.succeeded);
+        assert_eq!(result.attempts, 3);
+        assert_eq!(call_count, 3, "Should have called operation exactly max_attempts times");
+    });
+}
+
+// ─────────────────────────────────────────────────────────
+// 26. Custom retry policy tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_custom_retry_policy_no_backoff() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig {
+            max_attempts: 7,
+            initial_backoff: 0,
+            backoff_multiplier: 1,
+            max_backoff: 0,
+        };
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        assert_eq!(result.attempts, 7);
+        assert_eq!(result.total_delay, 0);
+    });
+}
+
+#[test]
+fn test_custom_retry_policy_high_multiplier() {
+    let config = RetryConfig {
+        max_attempts: 5,
+        initial_backoff: 2,
+        backoff_multiplier: 5,
+        max_backoff: 1000,
+    };
+    // Verify exponential growth with high multiplier
+    assert_eq!(config.compute_backoff(0), 2);    // 2 * 5^0 = 2
+    assert_eq!(config.compute_backoff(1), 10);   // 2 * 5^1 = 10
+    assert_eq!(config.compute_backoff(2), 50);   // 2 * 5^2 = 50
+    assert_eq!(config.compute_backoff(3), 250);  // 2 * 5^3 = 250
+    assert_eq!(config.compute_backoff(4), 1000); // 2 * 5^4 = 1250, capped to 1000
+}
+
+#[test]
+fn test_custom_retry_policy_max_backoff_cap() {
+    let config = RetryConfig {
+        max_attempts: 10,
+        initial_backoff: 100,
+        backoff_multiplier: 2,
+        max_backoff: 150,
+    };
+    // Should cap at max_backoff
+    assert_eq!(config.compute_backoff(0), 100); // 100 * 2^0 = 100
+    assert_eq!(config.compute_backoff(1), 150); // 100 * 2^1 = 200, capped to 150
+    assert_eq!(config.compute_backoff(2), 150); // 100 * 2^2 = 400, capped to 150
+    assert_eq!(config.compute_backoff(5), 150); // Always capped
+}
+
+// ─────────────────────────────────────────────────────────
+// 27. Retry policy interaction with circuit breaker
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_aggressive_policy_opens_circuit_on_exhaustion() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 5,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::aggressive();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        assert!(!result.succeeded);
+        assert_eq!(result.attempts, 5);
+        // Circuit should be open after 5 failures
+        assert_eq!(get_state(&env), CircuitState::Open);
+        assert_eq!(get_failure_count(&env), 5);
+    });
+}
+
+#[test]
+fn test_conservative_policy_opens_circuit_on_exhaustion() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 3,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::conservative();
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        assert!(!result.succeeded);
+        assert_eq!(result.attempts, 3);
+        // Circuit should be open after 3 failures
+        assert_eq!(get_state(&env), CircuitState::Open);
+    });
+}
+
+#[test]
+fn test_policy_stops_on_circuit_open_mid_retry() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 2,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig::aggressive(); // 5 attempts
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        // Should stop at 2 attempts when circuit opens
+        assert!(!result.succeeded);
+        assert_eq!(result.attempts, 2, "Should stop when circuit opens");
+        assert_eq!(get_state(&env), CircuitState::Open);
+    });
+}
+
+// ─────────────────────────────────────────────────────────
+// 28. Edge cases and boundary conditions
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_single_attempt_no_retry() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 10,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+        let prog = String::from_str(&env, "TestProg");
+        let op = symbol_short!("op");
+        let retry_cfg = RetryConfig {
+            max_attempts: 1,
+            initial_backoff: 10,
+            backoff_multiplier: 2,
+            max_backoff: 100,
+        };
+        let result = execute_with_retry(&env, &retry_cfg, prog, op, || Err(ERR_TRANSFER_FAILED));
+        assert!(!result.succeeded);
+        assert_eq!(result.attempts, 1);
+        assert_eq!(result.total_delay, 0, "No delay on single attempt");
+    });
+}
+
+#[test]
+fn test_zero_initial_backoff_with_multiplier() {
+    let config = RetryConfig {
+        max_attempts: 5,
+        initial_backoff: 0,
+        backoff_multiplier: 10,
+        max_backoff: 1000,
+    };
+    // All delays should be 0 when initial_backoff is 0
+    assert_eq!(config.compute_backoff(0), 0);
+    assert_eq!(config.compute_backoff(1), 0);
+    assert_eq!(config.compute_backoff(10), 0);
 }

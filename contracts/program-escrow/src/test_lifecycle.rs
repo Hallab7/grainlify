@@ -424,7 +424,7 @@ fn test_paused_lock_operation_blocked() {
     let program_id = String::from_str(&env, "hack-2026");
     client.init_program(&program_id, &admin, &token_id);
     client.initialize_contract(&admin);
-    client.set_paused(&Some(true), &None, &None, &None);
+    client.set_paused(&Some(true), &None, &None, &None::<soroban_sdk::String>);
 
     client.lock_program_funds(&10_000);
 }
@@ -443,7 +443,7 @@ fn test_paused_single_payout_blocked() {
     client.init_program(&program_id, &admin, &token_id);
     client.lock_program_funds(&100_000);
     client.initialize_contract(&admin);
-    client.set_paused(&None, &Some(true), &None, &None);
+    client.set_paused(&None, &Some(true), &None, &None::<soroban_sdk::String>);
 
     let r = Address::generate(&env);
     client.single_payout(&r, &1_000);
@@ -463,7 +463,7 @@ fn test_paused_batch_payout_blocked() {
     client.init_program(&program_id, &admin, &token_id);
     client.lock_program_funds(&100_000);
     client.initialize_contract(&admin);
-    client.set_paused(&None, &Some(true), &None, &None);
+    client.set_paused(&None, &Some(true), &None, &None::<soroban_sdk::String>);
 
     let r = Address::generate(&env);
     client.batch_payout(&vec![&env, r], &vec![&env, 1_000i128]);
@@ -484,11 +484,11 @@ fn test_paused_to_active_resume_via_unpause() {
     client.initialize_contract(&admin);
 
     // Transition: Active → Paused
-    client.set_paused(&None, &Some(true), &None, &None);
+    client.set_paused(&None, &Some(true), &None, &None::<soroban_sdk::String>);
     assert!(client.get_pause_flags().release_paused);
 
     // Transition: Paused → Active
-    client.set_paused(&None, &Some(false), &None, &None);
+    client.set_paused(&None, &Some(false), &None, &None::<soroban_sdk::String>);
     assert!(!client.get_pause_flags().release_paused);
 
     // Payout is allowed again
@@ -513,7 +513,7 @@ fn test_paused_lock_does_not_block_release() {
     client.initialize_contract(&admin);
 
     // Only lock is paused; release must still succeed
-    client.set_paused(&Some(true), &None, &None, &None);
+    client.set_paused(&Some(true), &None, &None, &None::<soroban_sdk::String>);
     assert!(client.get_pause_flags().lock_paused);
     assert!(!client.get_pause_flags().release_paused);
 
@@ -539,7 +539,7 @@ fn test_paused_release_does_not_block_lock() {
     client.initialize_contract(&admin);
 
     // Only release is paused; lock must still succeed
-    client.set_paused(&None, &Some(true), &None, &None);
+    client.set_paused(&None, &Some(true), &None, &None::<soroban_sdk::String>);
     assert!(!client.get_pause_flags().lock_paused);
     assert!(client.get_pause_flags().release_paused);
 
@@ -561,7 +561,7 @@ fn test_fully_paused_query_still_works() {
     client.init_program(&program_id, &admin, &token_id);
     client.lock_program_funds(&100_000);
     client.initialize_contract(&admin);
-    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None::<soroban_sdk::String>);
 
     let flags = client.get_pause_flags();
     assert!(flags.lock_paused);
@@ -795,7 +795,7 @@ fn test_complete_lifecycle_all_transitions() {
     env.mock_all_auths();
 
     let (client, contract_id) = make_client(&env);
-    let (token_client, token_id) = fund_contract(&env, &contract_id, 500_000);
+    let (token_client, token_id) = fund_contract(&env, &contract_id, 300_000);
     let admin = Address::generate(&env);
     let program_id = String::from_str(&env, "hack-2026");
 
@@ -818,11 +818,11 @@ fn test_complete_lifecycle_all_transitions() {
 
     // Active → Paused
     client.initialize_contract(&admin);
-    client.set_paused(&None, &Some(true), &None, &None);
+    client.set_paused(&None, &Some(true), &None, &None::<soroban_sdk::String>);
     assert!(client.get_pause_flags().release_paused);
 
     // Paused → Active (resume)
-    client.set_paused(&None, &Some(false), &None, &None);
+    client.set_paused(&None, &Some(false), &None, &None::<soroban_sdk::String>);
     assert!(!client.get_pause_flags().release_paused);
 
     // Active: drain the rest
@@ -831,6 +831,7 @@ fn test_complete_lifecycle_all_transitions() {
     assert_eq!(client.get_remaining_balance(), 0);
 
     // Drained → Active (top-up)
+    token::StellarAssetClient::new(&env, &token_id).mint(&contract_id, &100_000);
     let data = client.lock_program_funds(&100_000);
     assert_eq!(data.remaining_balance, 100_000);
 

@@ -154,11 +154,13 @@ impl GovernanceContract {
             .instance()
             .get(&PROPOSALS)
             .unwrap_or(Map::new(&env));
-        proposals.set(proposal_id, proposal);
+        proposals.set(proposal_id, proposal.clone());
         env.storage().instance().set(&PROPOSALS, &proposals);
         env.storage()
             .instance()
             .set(&PROPOSAL_COUNT, &(proposal_id + 1));
+        env.events()
+            .publish((symbol_short!("gov_prop"),), proposal.clone());
 
         Ok(proposal_id)
     }
@@ -217,7 +219,7 @@ impl GovernanceContract {
             Vote {
                 voter: voter.clone(),
                 proposal_id,
-                vote_type,
+                vote_type: vote_type.clone(),
                 voting_power,
                 timestamp: current_time,
             },
@@ -226,6 +228,16 @@ impl GovernanceContract {
         proposals.set(proposal_id, proposal);
         env.storage().instance().set(&PROPOSALS, &proposals);
         env.storage().instance().set(&VOTES, &votes);
+        env.events().publish(
+            (symbol_short!("gov_vote"),),
+            Vote {
+                voter,
+                proposal_id,
+                vote_type: vote_type.clone(),
+                voting_power,
+                timestamp: current_time,
+            },
+        );
         Ok(())
     }
 
@@ -261,6 +273,16 @@ impl GovernanceContract {
 
         proposals.set(proposal_id, proposal.clone());
         env.storage().instance().set(&PROPOSALS, &proposals);
+        env.events().publish(
+            (symbol_short!("gov_final"),),
+            (
+                proposal_id,
+                proposal.status.clone(),
+                proposal.votes_for,
+                proposal.votes_against,
+                proposal.votes_abstain,
+            ),
+        );
         Ok(proposal.status)
     }
 }
@@ -268,9 +290,9 @@ impl GovernanceContract {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger};
 
-    fn setup_test(env: &Env) -> (GovernanceContractClient, Address, Address) {
+    fn setup_test(env: &Env) -> (GovernanceContractClient<'_>, Address, Address) {
         let contract_id = env.register_contract(None, GovernanceContract);
         let client = GovernanceContractClient::new(env, &contract_id);
         let admin = Address::generate(env);
@@ -368,6 +390,63 @@ mod test {
         assert_eq!(status, ProposalStatus::Rejected);
     }
 
+    #[test]
+    fn test_events_emitted_for_proposal_vote_and_finalize() {
+        let env = Env::default();
+        let (client, _, proposer) = setup_test(&env);
+        let voter_for = Address::generate(&env);
+        let voter_against = Address::generate(&env);
+        let prop_id = client.create_proposal(
+            &proposer,
+            &BytesN::from_array(&env, &[9u8; 32]),
+            &symbol_short!("events"),
+        );
+        let e0 = env.events().all().len();
+        client.cast_vote(&voter_for, &prop_id, &VoteType::For);
+        let e1 = env.events().all().len();
+        assert!(e1 > e0);
+        client.cast_vote(&voter_against, &prop_id, &VoteType::Against);
+        env.ledger().with_mut(|li| li.timestamp = 200);
+        let _ = client.finalize_proposal(&prop_id);
+        let e2 = env.events().all().len();
+        assert!(e2 > e1);
+    }
+
+    #[test]
+    fn test_no_vote_event_emitted_on_expired_vote_attempt() {
+        let env = Env::default();
+        let (client, _, proposer) = setup_test(&env);
+        let voter = Address::generate(&env);
+        let prop_id = client.create_proposal(
+            &proposer,
+            &BytesN::from_array(&env, &[7u8; 32]),
+            &symbol_short!("noevent"),
+        );
+        env.ledger().with_mut(|li| li.timestamp = 1000);
+        let before = env.events().all().len();
+        let res = client.try_cast_vote(&voter, &prop_id, &VoteType::For);
+        assert_eq!(res, Err(Ok(Error::VotingEnded)));
+        let after = env.events().all().len();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn test_double_vote_emits_single_vote_event() {
+        let env = Env::default();
+        let (client, _, proposer) = setup_test(&env);
+        let voter = Address::generate(&env);
+        let prop_id = client.create_proposal(
+            &proposer,
+            &BytesN::from_array(&env, &[8u8; 32]),
+            &symbol_short!("dblvote"),
+        );
+        client.cast_vote(&voter, &prop_id, &VoteType::For);
+        let before = env.events().all().len();
+        let res = client.try_cast_vote(&voter, &prop_id, &VoteType::For);
+        assert_eq!(res, Err(Ok(Error::AlreadyVoted)));
+        let after = env.events().all().len();
+        assert_eq!(before, after);
+    }
     #[test]
     fn test_vote_ordering_for_against_then_for_for_is_approved() {
         let env = Env::default();

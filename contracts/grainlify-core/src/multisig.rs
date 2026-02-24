@@ -51,7 +51,7 @@ pub struct MultiSig;
 impl MultiSig {
     /// Initialize multisig configuration
     pub fn init(env: &Env, signers: Vec<Address>, threshold: u32) {
-        if threshold == 0 || threshold > signers.len() as u32 {
+        if threshold == 0 || threshold > signers.len() {
             panic!("{:?}", MultiSigError::InvalidThreshold);
         }
 
@@ -154,7 +154,6 @@ impl MultiSig {
     /// =======================
     /// Internal Helpers
     /// =======================
-
     fn get_config(env: &Env) -> MultiSigConfig {
         env.storage()
             .instance()

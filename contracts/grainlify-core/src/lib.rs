@@ -675,7 +675,6 @@ impl GrainlifyContract {
     /// # Panics
     /// * If admin address is not set (contract not initialized)
     /// * If caller is not the admin
-
     /// Executes an upgrade proposal that has met the multisig threshold.
     ///
     /// # Arguments
@@ -869,7 +868,6 @@ impl GrainlifyContract {
     /// # Panics
     /// * If admin address is not set (contract not initialized)
     /// * If caller is not the admin
-
     pub fn set_version(env: Env, new_version: u32) {
         let start = env.ledger().timestamp();
 
@@ -1309,11 +1307,9 @@ mod test {
         let state = migration_state.unwrap();
         assert_eq!(state.from_version, 2);
         assert_eq!(state.to_version, 3);
-        assert!(state.migrated_at >= 0);
-
         // 6. Verify events emitted
         let events = env.events().all();
-        assert!(events.len() > 0);
+        assert!(!events.is_empty());
     }
 
     #[test]
@@ -1469,7 +1465,6 @@ mod test {
         assert_eq!(state.to_version, 3);
         assert_eq!(state.migration_hash, hash);
         // Timestamp is set (may be 0 in test environment)
-        assert!(state.migrated_at >= 0);
     }
 
     #[test]
@@ -1490,7 +1485,7 @@ mod test {
         client.migrate(&3, &hash);
 
         // Verify auth was required
-        assert!(env.auths().len() > 0);
+        assert!(!env.auths().is_empty());
     }
 
     #[test]
@@ -1578,7 +1573,6 @@ mod test {
         assert_eq!(state.from_version, v_before);
         assert_eq!(state.to_version, 3);
     }
-
 }
 
 #[cfg(test)]

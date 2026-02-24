@@ -113,4 +113,24 @@ jobs:
           ../scripts/test_deploy_failures.sh
           ../scripts/test_upgrade_failures.sh
 
-   
+  sdk-smoke-tests:
+    name: SDK Smoke Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd contracts/sdk
+          npm install
+
+      - name: Run smoke tests
+        run: |
+          cd contracts/sdk
+          npm run test:smoke

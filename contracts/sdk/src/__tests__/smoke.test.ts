@@ -54,12 +54,16 @@ describe('SDK Example Smoke Tests', () => {
         const result = await lockFundsExample(client, mockKeypair);
         expect(result).toBeDefined();
         //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenCalledTimes(1);
+        //@ts-ignore - accessing private field
         expect(client.invokeContract).toHaveBeenCalledWith('lock_program_funds', [10000000n], mockKeypair);
     });
 
     it('should run release-funds example successfully', async () => {
         const result = await releaseFundsExample(client, mockKeypair);
         expect(result).toBe(3);
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenCalledTimes(1);
         //@ts-ignore - accessing private field
         expect(client.invokeContract).toHaveBeenCalledWith('trigger_program_releases', [], mockKeypair);
     });
@@ -74,20 +78,38 @@ describe('SDK Example Smoke Tests', () => {
         );
         expect(result).toBeDefined();
         //@ts-ignore - accessing private field
-        expect(client.invokeContract).toHaveBeenCalledWith('init_program', expect.anything(), mockKeypair);
+        expect(client.invokeContract).toHaveBeenCalledTimes(4); // init, lock, batch_payout, get_info
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenNthCalledWith(1, 'init_program', [mockProgramId, mockAuthorizedKey, mockTokenAddress], mockKeypair);
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenNthCalledWith(2, 'lock_program_funds', [50000000n], mockKeypair);
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenNthCalledWith(3, 'batch_payout', [expect.any(Array), expect.any(Array)], mockKeypair);
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenNthCalledWith(4, 'get_program_info', []);
     });
 
     it('should run batch-lock example successfully', async () => {
         const result = await batchLockExample(client, mockKeypair);
         expect(result).toBeDefined();
         //@ts-ignore - accessing private field
-        expect(client.invokeContract).toHaveBeenCalledWith('lock_program_funds', expect.anything(), mockKeypair);
+        expect(client.invokeContract).toHaveBeenCalledTimes(4); // 3 locks + 1 get_info
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenCalledWith('lock_program_funds', [10000000n], mockKeypair);
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenCalledWith('lock_program_funds', [20000000n], mockKeypair);
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenCalledWith('lock_program_funds', [30000000n], mockKeypair);
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenCalledWith('get_program_info', []);
     });
 
     it('should run query-escrow example successfully', async () => {
         const result = await queryEscrowExample(client);
         expect(result).toBeDefined();
         expect(result.program_id).toBe(mockProgramId);
+        //@ts-ignore - accessing private field
+        expect(client.invokeContract).toHaveBeenCalledTimes(1);
         //@ts-ignore - accessing private field
         expect(client.invokeContract).toHaveBeenCalledWith('get_program_info', []);
     });
