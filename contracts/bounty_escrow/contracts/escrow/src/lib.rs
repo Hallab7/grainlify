@@ -1,9 +1,14 @@
 #![no_std]
+#[allow(dead_code)]
 mod events;
 mod invariants;
+#[cfg(test)]
+mod test_metadata;
 
+mod test_cross_contract_interface;
 #[cfg(test)]
 mod test_rbac;
+mod traits;
 
 use events::{
     emit_batch_funds_locked, emit_batch_funds_released, emit_bounty_initialized, emit_funds_locked,
@@ -21,8 +26,11 @@ mod monitoring {
     use soroban_sdk::{contracttype, symbol_short, Address, Env, String, Symbol};
 
     // Storage keys
+    #[allow(dead_code)]
     const OPERATION_COUNT: &str = "op_count";
+    #[allow(dead_code)]
     const USER_COUNT: &str = "usr_count";
+    #[allow(dead_code)]
     const ERROR_COUNT: &str = "err_count";
 
     // Event: Operation metric
@@ -86,6 +94,7 @@ mod monitoring {
     }
 
     // Track operation
+    #[allow(dead_code)]
     pub fn track_operation(env: &Env, operation: Symbol, caller: Address, success: bool) {
         let key = Symbol::new(env, OPERATION_COUNT);
         let count: u64 = env.storage().persistent().get(&key).unwrap_or(0);
@@ -109,6 +118,7 @@ mod monitoring {
     }
 
     // Track performance
+    #[allow(dead_code)]
     pub fn emit_performance(env: &Env, function: Symbol, duration: u64) {
         let count_key = (Symbol::new(env, "perf_cnt"), function.clone());
         let time_key = (Symbol::new(env, "perf_time"), function.clone());
@@ -132,6 +142,7 @@ mod monitoring {
     }
 
     // Health check
+    #[allow(dead_code)]
     pub fn health_check(env: &Env) -> HealthStatus {
         let key = Symbol::new(env, OPERATION_COUNT);
         let ops: u64 = env.storage().persistent().get(&key).unwrap_or(0);
@@ -145,6 +156,7 @@ mod monitoring {
     }
 
     // Get analytics
+    #[allow(dead_code)]
     pub fn get_analytics(env: &Env) -> Analytics {
         let op_key = Symbol::new(env, OPERATION_COUNT);
         let usr_key = Symbol::new(env, USER_COUNT);
@@ -169,6 +181,7 @@ mod monitoring {
     }
 
     // Get state snapshot
+    #[allow(dead_code)]
     pub fn get_state_snapshot(env: &Env) -> StateSnapshot {
         let op_key = Symbol::new(env, OPERATION_COUNT);
         let usr_key = Symbol::new(env, USER_COUNT);
@@ -183,6 +196,7 @@ mod monitoring {
     }
 
     // Get performance stats
+    #[allow(dead_code)]
     pub fn get_performance_stats(env: &Env, function_name: Symbol) -> PerformanceStats {
         let count_key = (Symbol::new(env, "perf_cnt"), function_name.clone());
         let time_key = (Symbol::new(env, "perf_time"), function_name.clone());
@@ -245,6 +259,7 @@ mod anti_abuse {
             })
     }
 
+    #[allow(dead_code)]
     pub fn set_config(env: &Env, config: AntiAbuseConfig) {
         env.storage().instance().set(&AntiAbuseKey::Config, &config);
     }
@@ -339,6 +354,7 @@ mod anti_abuse {
 // ==================== END ANTI-ABUSE MODULE ====================
 
 // ==================== CONSTANTS ====================
+#[allow(dead_code)]
 const BASIS_POINTS: i128 = 10_000;
 const MAX_FEE_RATE: i128 = 5_000; // 50% max fee
 const MAX_BATCH_SIZE: u32 = 20;
@@ -372,7 +388,17 @@ pub enum Error {
     AmountBelowMinimum = 19,
     /// Returned when lock amount is above the configured policy maximum (Issue #62)
     AmountAboveMaximum = 20,
+    /// Returned when refund is blocked by a pending claim/dispute
     NotPaused = 21,
+    ClaimPending = 22,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowMetadata {
+    pub repo_id: u64,
+    pub issue_id: u64,
+    pub bounty_type: soroban_sdk::String,
 }
 
 #[contracttype]
@@ -402,7 +428,8 @@ pub struct Escrow {
 pub enum DataKey {
     Admin,
     Token,
-    Escrow(u64),             // bounty_id
+    Escrow(u64), // bounty_id
+    Metadata(u64),
     EscrowIndex,             // Vec<u64> of all bounty_ids
     DepositorIndex(Address), // Vec<u64> of bounty_ids by depositor
     FeeConfig,               // Fee configuration
@@ -559,6 +586,7 @@ impl BountyEscrowContract {
     }
 
     /// Calculate fee amount based on rate (in basis points)
+    #[allow(dead_code)]
     fn calculate_fee(amount: i128, fee_rate: i128) -> i128 {
         if fee_rate == 0 {
             return 0;
@@ -602,14 +630,14 @@ impl BountyEscrowContract {
         let mut fee_config = Self::get_fee_config_internal(&env);
 
         if let Some(rate) = lock_fee_rate {
-            if rate < 0 || rate > MAX_FEE_RATE {
+            if !(0..=MAX_FEE_RATE).contains(&rate) {
                 return Err(Error::InvalidFeeRate);
             }
             fee_config.lock_fee_rate = rate;
         }
 
         if let Some(rate) = release_fee_rate {
-            if rate < 0 || rate > MAX_FEE_RATE {
+            if !(0..=MAX_FEE_RATE).contains(&rate) {
                 return Err(Error::InvalidFeeRate);
             }
             fee_config.release_fee_rate = rate;
@@ -1402,6 +1430,22 @@ impl BountyEscrowContract {
             return Err(Error::FundsNotLocked);
         }
 
+        // GUARD 1: Block refund if there is a pending claim (Issue #391 fix)
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::PendingClaim(bounty_id))
+        {
+            let claim: ClaimRecord = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PendingClaim(bounty_id))
+                .unwrap();
+            if !claim.claimed {
+                return Err(Error::ClaimPending);
+            }
+        }
+
         let now = env.ledger().timestamp();
         let approval_key = DataKey::RefundApproval(bounty_id);
         let approval: Option<RefundApproval> = env.storage().persistent().get(&approval_key);
@@ -1431,7 +1475,6 @@ impl BountyEscrowContract {
         // Transfer the calculated refund amount to the designated recipient
         client.transfer(&env.current_contract_address(), &refund_to, &refund_amount);
 
-        escrow.status = EscrowStatus::Refunded;
         invariants::assert_escrow(&env, &escrow);
         // Update escrow state: subtract the amount exactly refunded
         escrow.remaining_amount -= refund_amount;
@@ -1910,7 +1953,7 @@ impl BountyEscrowContract {
             return Err(Error::FundsPaused);
         }
         // Validate batch size
-        let batch_size = items.len() as u32;
+        let batch_size = items.len();
         if batch_size == 0 {
             return Err(Error::InvalidBatchSize);
         }
@@ -2043,7 +2086,7 @@ impl BountyEscrowContract {
             return Err(Error::FundsPaused);
         }
         // Validate batch size
-        let batch_size = items.len() as u32;
+        let batch_size = items.len();
         if batch_size == 0 {
             return Err(Error::InvalidBatchSize);
         }
@@ -2147,7 +2190,90 @@ impl BountyEscrowContract {
 
         Ok(released_count)
     }
+    pub fn update_metadata(
+        env: Env,
+        _admin: Address,
+        bounty_id: u64,
+        repo_id: u64,
+        issue_id: u64,
+        bounty_type: soroban_sdk::String,
+    ) -> Result<(), Error> {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        stored_admin.require_auth();
+
+        let metadata = EscrowMetadata {
+            repo_id,
+            issue_id,
+            bounty_type,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Metadata(bounty_id), &metadata);
+        Ok(())
+    }
+
+    pub fn get_metadata(env: Env, bounty_id: u64) -> Result<EscrowMetadata, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Metadata(bounty_id))
+            .ok_or(Error::BountyNotFound)
+    }
 }
+
+// ==================== TRAIT IMPLEMENTATIONS ====================
+// Implement the EscrowInterface trait for cross-contract compatibility (Issue #483)
+impl traits::EscrowInterface for BountyEscrowContract {
+    /// Lock funds for a bounty through the trait interface
+    fn lock_funds(
+        env: &Env,
+        depositor: Address,
+        bounty_id: u64,
+        amount: i128,
+        deadline: u64,
+    ) -> Result<(), crate::Error> {
+        BountyEscrowContract::lock_funds(env.clone(), depositor, bounty_id, amount, deadline)
+    }
+
+    /// Release funds to contributor through the trait interface
+    fn release_funds(env: &Env, bounty_id: u64, contributor: Address) -> Result<(), crate::Error> {
+        BountyEscrowContract::release_funds(env.clone(), bounty_id, contributor)
+    }
+
+    /// Refund funds to depositor through the trait interface
+    fn refund(env: &Env, bounty_id: u64) -> Result<(), crate::Error> {
+        BountyEscrowContract::refund(env.clone(), bounty_id)
+    }
+
+    /// Get escrow information through the trait interface
+    fn get_escrow_info(env: &Env, bounty_id: u64) -> Result<crate::Escrow, crate::Error> {
+        BountyEscrowContract::get_escrow_info(env.clone(), bounty_id)
+    }
+
+    /// Get contract balance through the trait interface
+    fn get_balance(env: &Env) -> Result<i128, crate::Error> {
+        BountyEscrowContract::get_balance(env.clone())
+    }
+}
+
+// Implement the UpgradeInterface trait for version compatibility
+impl traits::UpgradeInterface for BountyEscrowContract {
+    /// Get contract version
+    fn get_version(env: &Env) -> u32 {
+        1 // Current version
+    }
+
+    /// Set contract version (admin only)
+    fn set_version(env: &Env, _new_version: u32) -> Result<(), soroban_sdk::String> {
+        // Version management - reserved for future use
+        // Currently, version is hardcoded to 1
+        Ok(())
+    }
+}
+// ==================== END TRAIT IMPLEMENTATIONS ====================
 
 #[cfg(test)]
 mod test;
@@ -2159,6 +2285,7 @@ mod test_auto_refund_permissions;
 mod test_bounty_escrow;
 #[cfg(test)]
 mod test_dispute_resolution;
+#[cfg(test)]
 mod test_expiration_and_dispute;
 #[cfg(test)]
 mod test_front_running_ordering;
@@ -2170,6 +2297,426 @@ mod test_lifecycle;
 #[cfg(test)]
 mod test_metadata_tagging;
 #[cfg(test)]
+mod test_partial_payout_rounding;
+#[cfg(test)]
 mod test_pause;
 #[cfg(test)]
+mod escrow_status_transition_tests {
+    use super::*;
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger},
+        token, Address, Env,
+    };
+
+    // Escrow Status Transition Matrix
+    //
+    // FROM        | TO          | EXPECTED RESULT
+    // ------------|-------------|----------------
+    // Locked      | Locked      | Err (invalid - BountyExists)
+    // Locked      | Released    | Ok (allowed)
+    // Locked      | Refunded    | Ok (allowed)
+    // Released    | Locked      | Err (invalid - BountyExists)
+    // Released    | Released    | Err (invalid - FundsNotLocked)
+    // Released    | Refunded    | Err (invalid - FundsNotLocked)
+    // Refunded    | Locked      | Err (invalid - BountyExists)
+    // Refunded    | Released    | Err (invalid - FundsNotLocked)
+    // Refunded    | Refunded    | Err (invalid - FundsNotLocked)
+
+    /// Construct a fresh Escrow instance with the specified status.
+    fn create_escrow_with_status(
+        env: &Env,
+        depositor: Address,
+        amount: i128,
+        status: EscrowStatus,
+        deadline: u64,
+    ) -> Escrow {
+        Escrow {
+            depositor,
+            amount,
+            remaining_amount: amount,
+            status,
+            deadline,
+            refund_history: vec![env],
+        }
+    }
+
+    /// Test setup holding environment, clients, and addresses
+    struct TestEnv {
+        env: Env,
+        contract_id: Address,
+        client: BountyEscrowContractClient<'static>,
+        token_admin: token::StellarAssetClient<'static>,
+        admin: Address,
+        depositor: Address,
+        contributor: Address,
+    }
+
+    impl TestEnv {
+        fn new() -> Self {
+            let env = Env::default();
+            env.mock_all_auths();
+
+            let admin = Address::generate(&env);
+            let depositor = Address::generate(&env);
+            let contributor = Address::generate(&env);
+
+            let token_id = env.register_stellar_asset_contract(admin.clone());
+            let token_admin = token::StellarAssetClient::new(&env, &token_id);
+
+            let contract_id = env.register_contract(None, BountyEscrowContract);
+            let client = BountyEscrowContractClient::new(&env, &contract_id);
+
+            client.init(&admin, &token_id);
+
+            Self {
+                env,
+                contract_id,
+                client,
+                token_admin,
+                admin,
+                depositor,
+                contributor,
+            }
+        }
+
+        /// Setup escrow in specific status and bypass standard locking process
+        fn setup_escrow_in_state(&self, status: EscrowStatus, bounty_id: u64, amount: i128) {
+            let deadline = self.env.ledger().timestamp() + 1000;
+            let escrow = create_escrow_with_status(
+                &self.env,
+                self.depositor.clone(),
+                amount,
+                status,
+                deadline,
+            );
+
+            // Mint tokens directly to the contract to bypass lock_funds logic but guarantee token transfer succeeds for valid transitions
+            self.token_admin.mint(&self.contract_id, &amount);
+
+            // Write escrow directly to contract storage
+            self.env.as_contract(&self.contract_id, || {
+                self.env
+                    .storage()
+                    .persistent()
+                    .set(&DataKey::Escrow(bounty_id), &escrow);
+            });
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum TransitionAction {
+        Lock,
+        Release,
+        Refund,
+    }
+
+    struct TransitionTestCase {
+        label: &'static str,
+        from: EscrowStatus,
+        action: TransitionAction,
+        expected_result: Result<(), Error>,
+    }
+
+    /// Table-driven test function executing all exhaustive transitions from the matrix
+    #[test]
+    fn test_all_status_transitions() {
+        let cases = [
+            TransitionTestCase {
+                label: "Locked to Locked (Lock)",
+                from: EscrowStatus::Locked,
+                action: TransitionAction::Lock,
+                expected_result: Err(Error::BountyExists),
+            },
+            TransitionTestCase {
+                label: "Locked to Released (Release)",
+                from: EscrowStatus::Locked,
+                action: TransitionAction::Release,
+                expected_result: Ok(()),
+            },
+            TransitionTestCase {
+                label: "Locked to Refunded (Refund)",
+                from: EscrowStatus::Locked,
+                action: TransitionAction::Refund,
+                expected_result: Ok(()),
+            },
+            TransitionTestCase {
+                label: "Released to Locked (Lock)",
+                from: EscrowStatus::Released,
+                action: TransitionAction::Lock,
+                expected_result: Err(Error::BountyExists),
+            },
+            TransitionTestCase {
+                label: "Released to Released (Release)",
+                from: EscrowStatus::Released,
+                action: TransitionAction::Release,
+                expected_result: Err(Error::FundsNotLocked),
+            },
+            TransitionTestCase {
+                label: "Released to Refunded (Refund)",
+                from: EscrowStatus::Released,
+                action: TransitionAction::Refund,
+                expected_result: Err(Error::FundsNotLocked),
+            },
+            TransitionTestCase {
+                label: "Refunded to Locked (Lock)",
+                from: EscrowStatus::Refunded,
+                action: TransitionAction::Lock,
+                expected_result: Err(Error::BountyExists),
+            },
+            TransitionTestCase {
+                label: "Refunded to Released (Release)",
+                from: EscrowStatus::Refunded,
+                action: TransitionAction::Release,
+                expected_result: Err(Error::FundsNotLocked),
+            },
+            TransitionTestCase {
+                label: "Refunded to Refunded (Refund)",
+                from: EscrowStatus::Refunded,
+                action: TransitionAction::Refund,
+                expected_result: Err(Error::FundsNotLocked),
+            },
+        ];
+
+        for case in cases {
+            let setup = TestEnv::new();
+            let bounty_id = 99;
+            let amount = 1000;
+
+            setup.setup_escrow_in_state(case.from.clone(), bounty_id, amount);
+            if let TransitionAction::Refund = case.action {
+                setup
+                    .env
+                    .ledger()
+                    .set_timestamp(setup.env.ledger().timestamp() + 2000);
+            }
+
+            match case.action {
+                TransitionAction::Lock => {
+                    let deadline = setup.env.ledger().timestamp() + 1000;
+                    let result = setup.client.try_lock_funds(
+                        &setup.depositor,
+                        &bounty_id,
+                        &amount,
+                        &deadline,
+                    );
+                    assert!(
+                        result.is_err(),
+                        "Transition '{}' failed: expected Err but got Ok",
+                        case.label
+                    );
+                    assert_eq!(
+                        result.unwrap_err().unwrap(),
+                        case.expected_result.unwrap_err(),
+                        "Transition '{}' failed: mismatched error variant",
+                        case.label
+                    );
+                }
+                TransitionAction::Release => {
+                    let result = setup
+                        .client
+                        .try_release_funds(&bounty_id, &setup.contributor);
+                    if case.expected_result.is_ok() {
+                        assert!(
+                            result.is_ok(),
+                            "Transition '{}' failed: expected Ok but got {:?}",
+                            case.label,
+                            result
+                        );
+                    } else {
+                        assert!(
+                            result.is_err(),
+                            "Transition '{}' failed: expected Err but got Ok",
+                            case.label
+                        );
+                        assert_eq!(
+                            result.unwrap_err().unwrap(),
+                            case.expected_result.unwrap_err(),
+                            "Transition '{}' failed: mismatched error variant",
+                            case.label
+                        );
+                    }
+                }
+                TransitionAction::Refund => {
+                    let result = setup.client.try_refund(&bounty_id);
+                    if case.expected_result.is_ok() {
+                        assert!(
+                            result.is_ok(),
+                            "Transition '{}' failed: expected Ok but got {:?}",
+                            case.label,
+                            result
+                        );
+                    } else {
+                        assert!(
+                            result.is_err(),
+                            "Transition '{}' failed: expected Err but got Ok",
+                            case.label
+                        );
+                        assert_eq!(
+                            result.unwrap_err().unwrap(),
+                            case.expected_result.unwrap_err(),
+                            "Transition '{}' failed: mismatched error variant",
+                            case.label
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Verifies allowed transition from Locked to Released succeeds
+    #[test]
+    fn test_locked_to_released_succeeds() {
+        let setup = TestEnv::new();
+        let bounty_id = 1;
+        let amount = 1000;
+        setup.setup_escrow_in_state(EscrowStatus::Locked, bounty_id, amount);
+        setup.client.release_funds(&bounty_id, &setup.contributor);
+        let stored_escrow = setup.client.get_escrow_info(&bounty_id);
+        assert_eq!(
+            stored_escrow.status,
+            EscrowStatus::Released,
+            "Escrow status did not transition to Released"
+        );
+    }
+
+    /// Verifies allowed transition from Locked to Refunded succeeds
+    #[test]
+    fn test_locked_to_refunded_succeeds() {
+        let setup = TestEnv::new();
+        let bounty_id = 1;
+        let amount = 1000;
+        setup.setup_escrow_in_state(EscrowStatus::Locked, bounty_id, amount);
+        setup
+            .env
+            .ledger()
+            .set_timestamp(setup.env.ledger().timestamp() + 2000);
+        setup.client.refund(&bounty_id);
+        let stored_escrow = setup.client.get_escrow_info(&bounty_id);
+        assert_eq!(
+            stored_escrow.status,
+            EscrowStatus::Refunded,
+            "Escrow status did not transition to Refunded"
+        );
+    }
+
+    /// Verifies disallowed transition attempt from Released to Locked fails
+    #[test]
+    fn test_released_to_locked_fails() {
+        let setup = TestEnv::new();
+        let bounty_id = 1;
+        let amount = 1000;
+        setup.setup_escrow_in_state(EscrowStatus::Released, bounty_id, amount);
+        let deadline = setup.env.ledger().timestamp() + 1000;
+        let result = setup
+            .client
+            .try_lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+        assert!(
+            result.is_err(),
+            "Expected locking an already released bounty to fail"
+        );
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            Error::BountyExists,
+            "Expected BountyExists when attempting to Lock Released escrow."
+        );
+        let stored = setup.client.get_escrow_info(&bounty_id);
+        assert_eq!(
+            stored.status,
+            EscrowStatus::Released,
+            "Escrow status mutated after failed transition"
+        );
+    }
+
+    /// Verifies disallowed transition attempt from Refunded to Released fails
+    #[test]
+    fn test_refunded_to_released_fails() {
+        let setup = TestEnv::new();
+        let bounty_id = 1;
+        let amount = 1000;
+        setup.setup_escrow_in_state(EscrowStatus::Refunded, bounty_id, amount);
+        let result = setup
+            .client
+            .try_release_funds(&bounty_id, &setup.contributor);
+        assert!(
+            result.is_err(),
+            "Expected releasing a refunded bounty to fail"
+        );
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            Error::FundsNotLocked,
+            "Expected FundsNotLocked error variant"
+        );
+        let stored = setup.client.get_escrow_info(&bounty_id);
+        assert_eq!(
+            stored.status,
+            EscrowStatus::Refunded,
+            "Escrow status mutated after failed transition"
+        );
+    }
+
+    /// Verifies uninitialized transition falls through correctly
+    #[test]
+    fn test_transition_from_uninitialized_state() {
+        let setup = TestEnv::new();
+        let bounty_id = 999;
+        let result = setup
+            .client
+            .try_release_funds(&bounty_id, &setup.contributor);
+        assert!(
+            result.is_err(),
+            "Expected release_funds on nonexistent to fail"
+        );
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            Error::BountyNotFound,
+            "Expected BountyNotFound error variant"
+        );
+    }
+
+    /// Verifies idempotent transition fails properly
+    #[test]
+    fn test_idempotent_transition_attempt() {
+        let setup = TestEnv::new();
+        let bounty_id = 1;
+        let amount = 1000;
+        setup.setup_escrow_in_state(EscrowStatus::Locked, bounty_id, amount);
+        setup.client.release_funds(&bounty_id, &setup.contributor);
+        let result = setup
+            .client
+            .try_release_funds(&bounty_id, &setup.contributor);
+        assert!(
+            result.is_err(),
+            "Expected idempotent transition attempt to fail"
+        );
+        assert_eq!(
+            result.unwrap_err().unwrap(),
+            Error::FundsNotLocked,
+            "Expected FundsNotLocked on idempotent attempt"
+        );
+    }
+
+    /// Explicitly check that status did not change on a failed transition
+    #[test]
+    fn test_status_field_unchanged_on_error() {
+        let setup = TestEnv::new();
+        let bounty_id = 1;
+        let amount = 1000;
+        setup.setup_escrow_in_state(EscrowStatus::Released, bounty_id, amount);
+        setup
+            .env
+            .ledger()
+            .set_timestamp(setup.env.ledger().timestamp() + 2000);
+        let result = setup.client.try_refund(&bounty_id);
+        assert!(result.is_err(), "Expected refund on Released state to fail");
+        let stored = setup.client.get_escrow_info(&bounty_id);
+        assert_eq!(
+            stored.status,
+            EscrowStatus::Released,
+            "Escrow status should remain strictly unchanged"
+        );
+    }
+}
+#[cfg(test)]
 mod test_query_filters;
+#[cfg(test)]
+mod test_status_transitions;

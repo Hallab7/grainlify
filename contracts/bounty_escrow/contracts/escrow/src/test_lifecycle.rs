@@ -111,7 +111,7 @@ fn test_full_bounty_lifecycle_with_refund() {
 
     // Verify the error is Unauthorized (error code 7)
     match non_admin_result {
-        Err(e) => {
+        Err(_e) => {
             // Convert the error to a string or check error code
             // println!("Expected error occurred: {:?}", e);
         }

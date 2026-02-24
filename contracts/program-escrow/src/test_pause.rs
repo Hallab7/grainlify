@@ -22,7 +22,14 @@ fn setup_with_admin<'a>(env: &Env) -> (ProgramEscrowContractClient<'a>, Address)
     (client, admin)
 }
 
-fn setup_program_with_admin<'a>(env: &Env) -> (ProgramEscrowContractClient<'a>, Address, Address, token::Client<'a>) {
+fn setup_program_with_admin<'a>(
+    env: &Env,
+) -> (
+    ProgramEscrowContractClient<'a>,
+    Address,
+    Address,
+    token::Client<'a>,
+) {
     let (client, admin) = setup_with_admin(env);
     let payout_key = Address::generate(env);
     
@@ -31,7 +38,7 @@ fn setup_program_with_admin<'a>(env: &Env) -> (ProgramEscrowContractClient<'a>, 
     
     env.mock_all_auths();
     let program_id = String::from_str(env, "test-prog");
-    client.init_program(&program_id, &payout_key, &token_client.address);
+    client.init_program(&program_id, &payout_key, &token_client.address, &admin, &None);
     (client, admin, payout_key, token_client)
 }
 

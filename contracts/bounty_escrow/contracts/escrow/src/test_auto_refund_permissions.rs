@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
@@ -25,11 +23,11 @@ fn create_escrow_contract<'a>(e: &Env) -> BountyEscrowContractClient<'a> {
 
 struct TestSetup<'a> {
     env: Env,
-    admin: Address,
+    _admin: Address, // Added underscore
     depositor: Address,
-    random_user: Address,
+    _random_user: Address, // Added underscore
     token: token::Client<'a>,
-    token_admin: token::StellarAssetClient<'a>,
+    _token_admin: token::StellarAssetClient<'a>, // Added underscore
     escrow: BountyEscrowContractClient<'a>,
 }
 
@@ -50,11 +48,11 @@ impl<'a> TestSetup<'a> {
 
         Self {
             env,
-            admin,
+            _admin: admin,
             depositor,
-            random_user,
+            _random_user: random_user,
             token,
-            token_admin,
+            _token_admin: token_admin,
             escrow,
         }
     }

@@ -303,7 +303,7 @@ describe('Enum size regression guards', () => {
   });
 
   it('BOUNTY_ESCROW_ERROR_MAP has 17 entries', () => {
-    expect(Object.keys(BOUNTY_ESCROW_ERROR_MAP).length).toBe(17);
+    expect(Object.keys(BOUNTY_ESCROW_ERROR_MAP).length).toBe(19);
   });
 
   it('GOVERNANCE_ERROR_MAP has 14 entries', () => {

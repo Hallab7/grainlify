@@ -1,9 +1,9 @@
-#![cfg(test)]
-
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events},
-    token, Address, Env, String, Symbol,
+    testutils::Address as _, // Removed unused 'Events'
+    token,
+    Address,
+    Env, // Removed unused 'String' and 'Symbol'
 };
 
 fn create_token(
@@ -26,7 +26,7 @@ fn create_escrow(env: &Env) -> BountyEscrowContractClient<'static> {
 
 struct Setup {
     env: Env,
-    admin: Address,
+    _admin: Address, // Fixed: Added underscore to silence unused field warning
     depositor: Address,
     escrow: BountyEscrowContractClient<'static>,
 }
@@ -43,7 +43,7 @@ impl Setup {
         token_admin.mint(&depositor, &10_000_000);
         Setup {
             env,
-            admin,
+            _admin: admin,
             depositor,
             escrow,
         }
@@ -98,6 +98,4 @@ fn test_query_filters_on_large_dataset() {
 fn test_tagging_logic_verification() {
     // This test is for future metadata tagging functionality
     // Currently the contract doesn't support metadata/tagging
-    // So we just assert true to allow CI to pass
-    assert!(true);
 }

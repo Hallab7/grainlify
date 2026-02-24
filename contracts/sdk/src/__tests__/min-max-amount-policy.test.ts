@@ -5,6 +5,7 @@ import {
   ContractErrorCode,
   createContractError,
   parseContractError,
+  parseContractErrorByCode,
 } from '../errors';
 import { Keypair } from '@stellar/stellar-sdk';
 
@@ -226,6 +227,38 @@ describe('Min/Max Amount Policy Enforcement', () => {
       const parsed = parseContractError(new Error('Amount exceeds maximum allowed'));
       expect(parsed.code).toBe(ContractErrorCode.AMOUNT_ABOVE_MAX);
       expect(parsed.code).not.toBe(ContractErrorCode.INVALID_AMOUNT);
+    });
+  });
+
+  // ── parseContractErrorByCode – numeric error code mapping ────────────────
+
+  describe('parseContractErrorByCode – bounty escrow numeric codes', () => {
+    it('maps numeric code 19 to AMOUNT_BELOW_MIN for bounty_escrow', () => {
+      const error = parseContractErrorByCode(19, 'bounty_escrow');
+      
+      expect(error).toBeInstanceOf(ContractError);
+      expect(error.code).toBe(ContractErrorCode.AMOUNT_BELOW_MIN);
+      expect(error.contractErrorCode).toBe(19);
+      expect(error.message).toContain('below');
+    });
+
+    it('maps numeric code 20 to AMOUNT_ABOVE_MAX for bounty_escrow', () => {
+      const error = parseContractErrorByCode(20, 'bounty_escrow');
+      
+      expect(error).toBeInstanceOf(ContractError);
+      expect(error.code).toBe(ContractErrorCode.AMOUNT_ABOVE_MAX);
+      expect(error.contractErrorCode).toBe(20);
+      expect(error.message).toMatch(/exceeds|maximum/i);
+    });
+
+    it('returns user-friendly message for code 19', () => {
+      const error = parseContractErrorByCode(19, 'bounty_escrow');
+      expect(error.message).toMatch(/minimum.*policy/i);
+    });
+
+    it('returns user-friendly message for code 20', () => {
+      const error = parseContractErrorByCode(20, 'bounty_escrow');
+      expect(error.message).toMatch(/maximum.*policy/i);
     });
   });
 });

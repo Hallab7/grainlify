@@ -1,4 +1,3 @@
-#![cfg(test)]
 /// # Escrow Analytics & Monitoring View Tests
 ///
 /// Closes #391

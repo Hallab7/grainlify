@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use super::*;
 use crate::invariants;
 use soroban_sdk::{testutils::Address as _, token, Address, Env};
@@ -12,7 +10,10 @@ fn setup_bounty(env: &Env) -> (BountyEscrowContractClient<'static>, Address, Add
     let admin = Address::generate(env);
     let depositor = Address::generate(env);
     let token_admin = Address::generate(env);
-    let token_id = env.register_stellar_asset_contract(token_admin.clone());
+    // Fixed: Updated to v2 to resolve deprecation warning
+    let token_id = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
     let token_admin_client = token::StellarAssetClient::new(env, &token_id);
 
     client.init(&admin, &token_id);
@@ -49,5 +50,5 @@ fn test_invariant_checker_ci_panics_when_disabled() {
         invariants::set_disabled_for_test(&env, true);
     });
 
-    client.lock_funds(&depositor, &7_u64, &5_000_i128, &(0_u64 + 500));
+    client.lock_funds(&depositor, &7_u64, &5_000_i128, &500);
 }

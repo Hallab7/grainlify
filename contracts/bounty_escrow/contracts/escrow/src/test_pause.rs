@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use super::*;
 use crate::PauseStateChanged;
 use soroban_sdk::{
@@ -41,9 +39,9 @@ fn test_granular_pause_lock() {
     escrow_client.init(&admin, &token_client.address);
 
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.lock_paused, false);
-    assert_eq!(flags.release_paused, false);
-    assert_eq!(flags.refund_paused, false);
+    assert!(!flags.lock_paused);
+    assert!(!flags.release_paused);
+    assert!(!flags.refund_paused);
 
     token_admin_client.mint(&depositor, &1000);
 
@@ -53,7 +51,7 @@ fn test_granular_pause_lock() {
 
     escrow_client.set_paused(&Some(true), &None, &None, &None);
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.lock_paused, true);
+    assert!(flags.lock_paused);
 
     let bounty_id_2: u64 = 2;
     let res = escrow_client.try_lock_funds(&depositor, &bounty_id_2, &100, &deadline);
@@ -61,7 +59,7 @@ fn test_granular_pause_lock() {
 
     escrow_client.set_paused(&Some(false), &None, &None, &None);
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.lock_paused, false);
+    assert!(!flags.lock_paused);
 
     escrow_client.lock_funds(&depositor, &bounty_id_2, &100, &deadline);
 }
@@ -88,14 +86,14 @@ fn test_granular_pause_release() {
 
     escrow_client.set_paused(&None, &Some(true), &None, &None);
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.release_paused, true);
+    assert!(flags.release_paused);
 
     let res = escrow_client.try_release_funds(&bounty_id, &contributor);
     assert!(res.is_err());
 
     escrow_client.set_paused(&None, &Some(false), &None, &None);
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.release_paused, false);
+    assert!(!flags.release_paused);
 
     escrow_client.release_funds(&bounty_id, &contributor);
 }
@@ -124,14 +122,14 @@ fn test_granular_pause_refund() {
 
     escrow_client.set_paused(&None, &None, &Some(true), &None);
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.refund_paused, true);
+    assert!(flags.refund_paused);
 
     let res = escrow_client.try_refund(&bounty_id);
     assert!(res.is_err());
 
     escrow_client.set_paused(&None, &None, &Some(false), &None);
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.refund_paused, false);
+    assert!(!flags.refund_paused);
 
     escrow_client.refund(&bounty_id);
 }
@@ -149,15 +147,15 @@ fn test_mixed_pause_states() {
 
     escrow_client.set_paused(&Some(true), &Some(true), &Some(false), &None);
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.lock_paused, true);
-    assert_eq!(flags.release_paused, true);
-    assert_eq!(flags.refund_paused, false);
+    assert!(flags.lock_paused);
+    assert!(flags.release_paused);
+    assert!(!flags.refund_paused);
 
     escrow_client.set_paused(&None, &Some(false), &None, &None);
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.lock_paused, true);
-    assert_eq!(flags.release_paused, false);
-    assert_eq!(flags.refund_paused, false);
+    assert!(flags.lock_paused);
+    assert!(!flags.release_paused);
+    assert!(!flags.refund_paused);
 }
 
 // =========================================================================
@@ -205,7 +203,7 @@ fn test_set_paused_emits_events() {
     let data = emitted.2;
     // Data is a struct PauseStateChanged, we need to deserialize it properly
     let pause_state: PauseStateChanged = data.try_into_val(&env).unwrap();
-    assert_eq!(pause_state.paused, true);
+    assert!(pause_state.paused);
     assert_eq!(pause_state.admin, admin);
 }
 
@@ -629,7 +627,7 @@ fn test_rbac_after_emergency_withdraw_can_unpause_and_reuse() {
 
     escrow_client.set_paused(&Some(false), &None, &None, &None);
     let flags = escrow_client.get_pause_flags();
-    assert_eq!(flags.lock_paused, false);
+    assert!(!flags.lock_paused);
 
     let new_depositor = Address::generate(&env);
     let token_admin_client = token::StellarAssetClient::new(&env, &token_client.address);

@@ -27,7 +27,7 @@ fn setup_program(
     let token_admin_client = token::StellarAssetClient::new(env, &token_id);
 
     let program_id = String::from_str(env, "hack-2026");
-    client.init_program(&program_id, &admin, &token_id);
+    client.init_program(&program_id, &admin, &token_id, &admin, &None);
 
     if initial_amount > 0 {
         token_admin_client.mint(&client.address, &initial_amount);
@@ -64,7 +64,7 @@ fn test_init_program_and_event() {
     let token_id = env.register_stellar_asset_contract(token_admin);
     let program_id = String::from_str(&env, "hack-2026");
 
-    let data = client.init_program(&program_id, &admin, &token_id);
+    let data = client.init_program(&program_id, &admin, &token_id, &admin, &None);
     assert_eq!(data.total_funds, 0);
     assert_eq!(data.remaining_balance, 0);
 
@@ -384,6 +384,8 @@ fn test_full_lifecycle_multi_program_batch_payouts() {
         &String::from_str(&env, "hackathon-alpha"),
         &auth_key_a,
         &token_id,
+        &auth_key_a,
+        &None,
     );
     assert_eq!(prog_a.total_funds, 0);
     assert_eq!(prog_a.remaining_balance, 0);
@@ -397,6 +399,8 @@ fn test_full_lifecycle_multi_program_batch_payouts() {
         &String::from_str(&env, "hackathon-beta"),
         &auth_key_b,
         &token_id,
+        &auth_key_b,
+        &None,
     );
     assert_eq!(prog_b.total_funds, 0);
 
@@ -1872,6 +1876,133 @@ fn test_combined_recipient_and_amount_filter_manual() {
     assert_eq!(large_amount, 200_000);
 }
 
+/// query_releases_by_recipient returns only entries for the given recipient.
+/// This function has no existing tests at all.
+#[test]
+fn test_query_releases_by_recipient_returns_correct_subset() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 150_000);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
+    // Two schedules for r1, one for r2
+    client.create_program_release_schedule(&50_000, &(now + 50), &r1);
+    client.create_program_release_schedule(&40_000, &(now + 50), &r2);
+    client.create_program_release_schedule(&60_000, &(now + 50), &r1);
+
+    env.ledger().set_timestamp(now + 50);
+    client.trigger_program_releases();
+
+    // r1 should have 2 release history entries
+    let r1_releases = client.query_releases_by_recipient(&r1, &0, &10);
+    assert_eq!(r1_releases.len(), 2);
+    for entry in r1_releases.iter() {
+        assert_eq!(entry.recipient, r1);
+    }
+
+    // r2 should have 1 release history entry
+    let r2_releases = client.query_releases_by_recipient(&r2, &0, &10);
+    assert_eq!(r2_releases.len(), 1);
+    assert_eq!(r2_releases.get(0).unwrap().recipient, r2);
+}
+
+/// query_releases_by_recipient with an address that has no releases returns empty.
+#[test]
+fn test_query_releases_by_recipient_unknown_returns_empty() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 50_000);
+
+    let r1 = Address::generate(&env);
+    let unknown = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
+    client.create_program_release_schedule(&50_000, &(now + 10), &r1);
+    env.ledger().set_timestamp(now + 10);
+    client.trigger_program_releases();
+
+    let results = client.query_releases_by_recipient(&unknown, &0, &10);
+    assert_eq!(results.len(), 0);
+}
+
+/// query_releases_by_recipient pagination: offset correctly skips earlier entries.
+#[test]
+fn test_query_releases_by_recipient_pagination_offset() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 500_000);
+
+    let recipient = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
+    // Create 4 schedules for the same recipient, all due at the same time
+    for i in 0..4u64 {
+        client.create_program_release_schedule(&100_000, &(now + 50 + i), &recipient);
+    }
+
+    env.ledger().set_timestamp(now + 60);
+    client.trigger_program_releases();
+
+    // All 4 should be in history
+    let all = client.query_releases_by_recipient(&recipient, &0, &10);
+    assert_eq!(all.len(), 4);
+
+    // Page 1: first 2
+    let page1 = client.query_releases_by_recipient(&recipient, &0, &2);
+    assert_eq!(page1.len(), 2);
+
+    // Page 2: next 2
+    let page2 = client.query_releases_by_recipient(&recipient, &2, &2);
+    assert_eq!(page2.len(), 2);
+
+    // Page 3: nothing left
+    let page3 = client.query_releases_by_recipient(&recipient, &4, &2);
+    assert_eq!(page3.len(), 0);
+
+    // No overlap
+    assert_ne!(
+        page1.get(0).unwrap().schedule_id,
+        page2.get(0).unwrap().schedule_id
+    );
+}
+
+/// query_schedules_by_status pagination: offset > 0 skips the right entries.
+#[test]
+fn test_query_schedules_by_status_pagination_offset_and_limit() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 500_000);
+
+    let now = env.ledger().timestamp();
+
+    // 5 schedules, all in the future (all pending/unreleased)
+    for _ in 0..5 {
+        let r = Address::generate(&env);
+        client.create_program_release_schedule(&80_000, &(now + 9999), &r);
+    }
+
+    // Page 1: 2 items
+    let page1 = client.query_schedules_by_status(&false, &0, &2);
+    assert_eq!(page1.len(), 2);
+
+    // Page 2: 2 items
+    let page2 = client.query_schedules_by_status(&false, &2, &2);
+    assert_eq!(page2.len(), 2);
+
+    // Page 3: 1 item remaining
+    let page3 = client.query_schedules_by_status(&false, &4, &2);
+    assert_eq!(page3.len(), 1);
+
+    // No overlap across pages
+    assert_ne!(
+        page1.get(0).unwrap().schedule_id,
+        page2.get(0).unwrap().schedule_id
+    );
+    assert_ne!(
+        page2.get(0).unwrap().schedule_id,
+        page3.get(0).unwrap().schedule_id
+    );
+}
+
 // =============================================================================
 // TIME-BASED RELEASE SCHEDULE — EDGE CASE TESTS
 // Issue #459: extend coverage for timestamp boundary, idempotency, history
@@ -1900,7 +2031,7 @@ fn test_trigger_releases_idempotent_already_released_skipped() {
     let second = client.trigger_program_releases();
     assert_eq!(second, 0);
     assert_eq!(token_client.balance(&recipient), 50_000); // unchanged
-    assert_eq!(client.get_remaining_balance(), 0);        // unchanged
+    assert_eq!(client.get_remaining_balance(), 0); // unchanged
 }
 
 /// Partial trigger: schedules due at T are released; schedules due at T+N

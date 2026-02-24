@@ -1,17 +1,17 @@
-#![cfg(test)]
-
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
-    token, Address, Env,
+    testutils::Address as _, // Removed unused 'Ledger'
+    token,
+    Address,
+    Env,
 };
 
 struct RbacSetup<'a> {
     env: Env,
     admin: Address,
-    anti_abuse_admin: Address,
+    _anti_abuse_admin: Address, // Fixed: Added underscore
     depositor: Address,
-    recipient: Address,
+    _recipient: Address, // Fixed: Added underscore
     random: Address,
     client: BountyEscrowContractClient<'a>,
     token_id: Address,
@@ -20,7 +20,7 @@ struct RbacSetup<'a> {
 impl<'a> RbacSetup<'a> {
     fn new() -> Self {
         let env = Env::default();
-        env.mock_all_auths(); // Enable for setup only
+        env.mock_all_auths();
         let contract_id = env.register_contract(None, BountyEscrowContract);
         let client = BountyEscrowContractClient::new(&env, &contract_id);
 
@@ -35,18 +35,15 @@ impl<'a> RbacSetup<'a> {
             .register_stellar_asset_contract_v2(token_admin.clone())
             .address();
 
-        // Initialize contract
         client.init(&admin, &token_id);
-
-        // Initialize anti-abuse admin via contract admin
         client.set_anti_abuse_admin(&anti_abuse_admin);
 
         Self {
             env,
             admin,
-            anti_abuse_admin,
+            _anti_abuse_admin: anti_abuse_admin,
             depositor,
-            recipient,
+            _recipient: recipient,
             random,
             client,
             token_id,

@@ -1574,3 +1574,6 @@ mod test {
         assert_eq!(state.to_version, 3);
     }
 }
+
+#[cfg(test)]
+mod migration_hook_tests;

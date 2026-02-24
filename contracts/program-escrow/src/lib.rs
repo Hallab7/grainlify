@@ -663,6 +663,7 @@ impl ProgramEscrowContract {
                 authorized_payout_key: authorized_payout_key.clone(),
                 payout_history: vec![&env],
                 token_address: token_address.clone(),
+                initial_liquidity: 0,
             };
             let program_key = DataKey::Program(program_id.clone());
             env.storage().instance().set(&program_key, &program_data);

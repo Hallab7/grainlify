@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
@@ -30,7 +28,7 @@ struct Setup {
     env: Env,
     depositor: Address,
     contributor: Address,
-    token: token::Client<'static>,
+    _token: token::Client<'static>, // Added underscore to silence 'never read' warning
     token_admin: token::StellarAssetClient<'static>,
     escrow: BountyEscrowContractClient<'static>,
 }
@@ -50,13 +48,12 @@ impl Setup {
             env,
             depositor,
             contributor,
-            token,
+            _token: token, // Updated field name
             token_admin,
             escrow,
         }
     }
 }
-
 //  status filter tests
 
 #[test]
@@ -192,7 +189,7 @@ fn test_query_by_amount_range_returns_matching_escrows() {
     assert_eq!(results.len(), 2);
     for i in 0..results.len() {
         let amt = results.get(i).unwrap().escrow.amount;
-        assert!(amt >= 400 && amt <= 1100);
+        assert!((400..=1100).contains(&amt));
     }
 }
 
@@ -386,4 +383,122 @@ fn test_aggregate_stats_reflects_correct_counts_after_lifecycle() {
     assert_eq!(stats.total_released, 300); // bounties 1+2
     assert_eq!(stats.total_refunded, 300); // bounty 3
     assert_eq!(stats.total_locked, 400); // bounty 4
+}
+
+/// Depositor query: pagination with offset > 0 correctly skips earlier records.
+#[test]
+fn test_query_by_depositor_pagination_offset_skips_correctly() {
+    let s = Setup::new();
+    let dl = s.env.ledger().timestamp() + 1000;
+
+    // Lock 4 bounties for the same depositor
+    for i in 1u64..=4 {
+        s.escrow
+            .lock_funds(&s.depositor, &i, &(i as i128 * 100), &dl);
+    }
+
+    // Page 1: first 2
+    let page1 = s.escrow.query_escrows_by_depositor(&s.depositor, &0, &2);
+    assert_eq!(page1.len(), 2);
+
+    // Page 2: next 2
+    let page2 = s.escrow.query_escrows_by_depositor(&s.depositor, &2, &2);
+    assert_eq!(page2.len(), 2);
+
+    // Page 3: nothing left
+    let page3 = s.escrow.query_escrows_by_depositor(&s.depositor, &4, &2);
+    assert_eq!(page3.len(), 0);
+
+    // No overlap: ids from page1 and page2 must be disjoint
+    assert_ne!(
+        page1.get(0).unwrap().bounty_id,
+        page2.get(0).unwrap().bounty_id
+    );
+    assert_ne!(
+        page1.get(1).unwrap().bounty_id,
+        page2.get(0).unwrap().bounty_id
+    );
+}
+
+/// Deadline filter: when no escrow falls within the range, result is empty.
+#[test]
+fn test_query_by_deadline_no_results_outside_range() {
+    let s = Setup::new();
+    let base = s.env.ledger().timestamp();
+
+    s.escrow.lock_funds(&s.depositor, &1, &100, &(base + 100));
+    s.escrow.lock_funds(&s.depositor, &2, &200, &(base + 200));
+
+    // Query a range that none of the deadlines fall into
+    let results = s
+        .escrow
+        .query_escrows_by_deadline(&(base + 5000), &(base + 9999), &0, &10);
+    assert_eq!(results.len(), 0);
+}
+
+/// get_escrow_ids_by_status: pagination with offset returns the correct slice.
+#[test]
+fn test_get_escrow_ids_by_status_pagination_offset_and_limit() {
+    let s = Setup::new();
+    let dl = s.env.ledger().timestamp() + 1000;
+
+    for i in 1u64..=5 {
+        s.escrow
+            .lock_funds(&s.depositor, &i, &(i as i128 * 50), &dl);
+    }
+
+    // All 5 are Locked — paginate in slices of 2
+    let page1 = s
+        .escrow
+        .get_escrow_ids_by_status(&EscrowStatus::Locked, &0, &2);
+    assert_eq!(page1.len(), 2);
+
+    let page2 = s
+        .escrow
+        .get_escrow_ids_by_status(&EscrowStatus::Locked, &2, &2);
+    assert_eq!(page2.len(), 2);
+
+    let page3 = s
+        .escrow
+        .get_escrow_ids_by_status(&EscrowStatus::Locked, &4, &2);
+    assert_eq!(page3.len(), 1);
+
+    // No ID should appear in more than one page
+    assert_ne!(page1.get(0).unwrap(), page2.get(0).unwrap());
+    assert_ne!(page2.get(0).unwrap(), page3.get(0).unwrap());
+}
+
+/// Aggregate stats: total_locked + total_released + total_refunded must equal
+/// the sum of all original amounts locked, regardless of lifecycle state.
+#[test]
+fn test_aggregate_stats_amounts_invariant_sum_equals_total_locked() {
+    let s = Setup::new();
+    let now = s.env.ledger().timestamp();
+    let dl = now + 100;
+
+    // Lock 4 bounties with known amounts: 100 + 200 + 300 + 400 = 1000
+    s.escrow.lock_funds(&s.depositor, &1, &100, &dl);
+    s.escrow.lock_funds(&s.depositor, &2, &200, &dl);
+    s.escrow.lock_funds(&s.depositor, &3, &300, &dl);
+    s.escrow.lock_funds(&s.depositor, &4, &400, &dl);
+
+    // Release bounty 1 and 2
+    s.escrow.release_funds(&1, &s.contributor);
+    s.escrow.release_funds(&2, &s.contributor);
+
+    // Refund bounty 3 after deadline
+    s.env.ledger().set_timestamp(dl + 1);
+    s.escrow.refund(&3);
+
+    // Bounty 4 stays Locked
+    let stats = s.escrow.get_aggregate_stats();
+
+    // Individual bucket checks
+    assert_eq!(stats.total_released, 300); // 100 + 200
+    assert_eq!(stats.total_refunded, 300); // 300
+    assert_eq!(stats.total_locked, 400); // 400
+
+    // Invariant: buckets sum to the total amount ever locked
+    let total = stats.total_locked + stats.total_released + stats.total_refunded;
+    assert_eq!(total, 1000);
 }

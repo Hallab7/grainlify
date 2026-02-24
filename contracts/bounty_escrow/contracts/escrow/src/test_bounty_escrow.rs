@@ -1,4 +1,3 @@
-#![cfg(test)]
 use crate::{BountyEscrowContract, BountyEscrowContractClient, Error as ContractError};
 use soroban_sdk::testutils::Events;
 use soroban_sdk::{
@@ -769,7 +768,7 @@ fn test_update_fee_config_partial_updates_preserve_existing_values() {
     assert_eq!(config.lock_fee_rate, 300);
     assert_eq!(config.release_fee_rate, 200); // Should remain 200
     assert_eq!(config.fee_recipient, fee_recipient_1); // Should remain recipient_1
-    assert_eq!(config.fee_enabled, true); // Should remain true
+    assert!(config.fee_enabled); // Should remain true
 
     // Third update: Update recipient and enabled flag
     client.update_fee_config(&None, &None, &Some(fee_recipient_2.clone()), &Some(false));
@@ -778,7 +777,7 @@ fn test_update_fee_config_partial_updates_preserve_existing_values() {
     assert_eq!(config.lock_fee_rate, 300); // Should remain 300
     assert_eq!(config.release_fee_rate, 200); // Should remain 200
     assert_eq!(config.fee_recipient, fee_recipient_2); // Should be updated to recipient_2
-    assert_eq!(config.fee_enabled, false); // Should be updated to false
+    assert!(!config.fee_enabled); // Should be updated to false
 }
 
 #[test]

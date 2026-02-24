@@ -194,6 +194,8 @@ export const BOUNTY_ESCROW_ERROR_MAP: Record<number, ContractErrorCode> = {
   16: ContractErrorCode.BOUNTY_INSUFFICIENT_FUNDS,
   17: ContractErrorCode.BOUNTY_REFUND_NOT_APPROVED,
   18: ContractErrorCode.BOUNTY_FUNDS_PAUSED,
+  19: ContractErrorCode.AMOUNT_BELOW_MIN,
+  20: ContractErrorCode.AMOUNT_ABOVE_MAX,
 };
 
 /** Governance #[contracterror] discriminants → SDK code */
