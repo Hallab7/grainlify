@@ -331,9 +331,6 @@ const RELEASE_HISTORY: Symbol = symbol_short!("RelHist");
 const NEXT_SCHEDULE_ID: Symbol = symbol_short!("NxtSched");
 const PROGRAM_INDEX: Symbol = symbol_short!("ProgIdx");
 const AUTH_KEY_INDEX: Symbol = symbol_short!("AuthIdx");
-const PROGRAM_REGISTRY: Symbol = symbol_short!("ProgReg2");
-const FEE_CONFIG: Symbol = symbol_short!("FeeConf");
-const BASIS_POINTS: i128 = 10_000;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -748,6 +745,11 @@ impl ProgramEscrowContract {
     pub fn program_exists(env: Env) -> bool {
         env.storage().instance().has(&PROGRAM_DATA)
             || env.storage().instance().has(&PROGRAM_REGISTRY)
+    }
+
+    /// Check if a program exists by its program_id (for batch-registered programs).
+    pub fn program_exists_by_id(env: Env, program_id: String) -> bool {
+        env.storage().instance().has(&DataKey::Program(program_id))
     }
 
     // ========================================================================
@@ -1360,10 +1362,6 @@ impl ProgramEscrowContract {
             .instance()
             .get(&SCHEDULES)
             .unwrap_or_else(|| Vec::new(&env))
-    }
-
-    pub fn get_program_release_schedules(env: Env) -> Vec<ProgramReleaseSchedule> {
-        Self::get_release_schedules(env)
     }
 
     pub fn get_program_release_history(env: Env) -> Vec<ProgramReleaseHistory> {

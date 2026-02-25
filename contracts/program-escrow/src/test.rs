@@ -1074,17 +1074,115 @@ fn test_batch_register_second_batch_conflicts_with_first() {
 }
 
 // =============================================================================
-// TESTS FOR MULTI-TENANT ISOLATION
+// TESTS FOR MAXIMUM PROGRAM COUNT (#501)
 // =============================================================================
 
-// Note: Comprehensive multi-tenant isolation tests are implemented in lib.rs
-// using the ProgramEscrowContractClient for proper integration testing.
-// The tests verify:
-// - Funds and balance isolation between programs
-// - Payout history isolation
-// - Release schedule isolation
-// - Release history isolation
-// - Analytics isolation concepts (for future program-specific analytics)
+/// Stress test: create many programs via sequential batches and verify counts
+/// and sampling queries remain accurate (bounded for CI).
+#[test]
+fn test_max_program_count_sequential_batches_queries_accurate() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, ProgramEscrowContract);
+    let client = ProgramEscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    const BATCH_SIZE: u32 = 10;
+    const NUM_BATCHES: u32 = 3;
+    let total_programs = BATCH_SIZE * NUM_BATCHES;
+
+    for batch in 0..NUM_BATCHES {
+        let mut items = Vec::new(&env);
+        for i in 0..BATCH_SIZE {
+            let idx = batch * BATCH_SIZE + i;
+            items.push_back(ProgramInitItem {
+                program_id: make_program_id(&env, idx),
+                authorized_payout_key: admin.clone(),
+                token_address: token.clone(),
+            });
+        }
+        let count = client.try_batch_initialize_programs(&items).unwrap().unwrap();
+        assert_eq!(count, BATCH_SIZE);
+    }
+
+    for i in 0..total_programs {
+        assert!(
+            client.program_exists_by_id(&make_program_id(&env, i)),
+            "program {} should exist",
+            i
+        );
+    }
+    assert!(client.program_exists());
+}
+
+// =============================================================================
+// TESTS FOR MULTI-TENANT ISOLATION (#473)
+// =============================================================================
+
+/// Verify funds, schedules, and analytics for one program cannot affect or
+/// be read as another program's data (tenant isolation).
+#[test]
+fn test_multi_tenant_no_cross_program_balance_or_analytics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_a = env.register_contract(None, ProgramEscrowContract);
+    let client_a = ProgramEscrowContractClient::new(&env, &contract_a);
+    let contract_b = env.register_contract(None, ProgramEscrowContract);
+    let client_b = ProgramEscrowContractClient::new(&env, &contract_b);
+
+    let token_admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(token_admin.clone());
+    let token_id = sac.address();
+    let _token_client = token::Client::new(&env, &token_id);
+    let token_sac = token::StellarAssetClient::new(&env, &token_id);
+
+    let admin_a = Address::generate(&env);
+    let admin_b = Address::generate(&env);
+    let creator = Address::generate(&env);
+
+    client_a.init_program(
+        &String::from_str(&env, "prog-isolation-a"),
+        &admin_a,
+        &token_id,
+        &creator,
+        &None,
+    );
+    client_b.init_program(
+        &String::from_str(&env, "prog-isolation-b"),
+        &admin_b,
+        &token_id,
+        &creator,
+        &None,
+    );
+
+    token_sac.mint(&client_a.address, &500_000);
+    token_sac.mint(&client_b.address, &300_000);
+    client_a.lock_program_funds(&500_000);
+    client_b.lock_program_funds(&300_000);
+
+    let stats_a = client_a.get_program_aggregate_stats();
+    let stats_b = client_b.get_program_aggregate_stats();
+    assert_eq!(stats_a.total_funds, 500_000);
+    assert_eq!(stats_a.remaining_balance, 500_000);
+    assert_eq!(stats_b.total_funds, 300_000);
+    assert_eq!(stats_b.remaining_balance, 300_000);
+
+    let r = Address::generate(&env);
+    client_a.single_payout(&r, &100_000);
+
+    assert_eq!(client_a.get_remaining_balance(), 400_000);
+    assert_eq!(client_b.get_remaining_balance(), 300_000);
+    let info_a = client_a.get_program_info();
+    let info_b = client_b.get_program_info();
+    assert_eq!(info_a.payout_history.len(), 1);
+    assert_eq!(info_b.payout_history.len(), 0);
+    assert_eq!(client_a.get_program_aggregate_stats().payout_count, 1);
+    assert_eq!(client_b.get_program_aggregate_stats().payout_count, 0);
+}
+
+// Note: Additional multi-tenant isolation tests exist above (test_batch_payout_no_cross_program_interference, etc.)
 
 // =============================================================================
 // TESTS FOR PROGRAM ANALYTICS AND MONITORING VIEWS
@@ -1206,14 +1304,14 @@ fn test_analytics_with_schedules() {
     let future_timestamp = env.ledger().timestamp() + 1000;
 
     client.create_program_release_schedule(
+        &recipient1,
         &20_000_0000000,
         &future_timestamp,
-        &recipient1,
     );
     client.create_program_release_schedule(
+        &recipient2,
         &30_000_0000000,
         &(future_timestamp + 100),
-        &recipient2,
     );
 
     let stats = client.get_program_aggregate_stats();
@@ -1233,9 +1331,9 @@ fn test_analytics_after_releasing_schedules() {
     let release_timestamp = env.ledger().timestamp() + 50;
 
     client.create_program_release_schedule(
+        &recipient,
         &20_000_0000000,
         &release_timestamp,
-        &recipient,
     );
 
     // Advance time and trigger releases
@@ -1278,16 +1376,16 @@ fn test_health_due_schedules() {
     let now = env.ledger().timestamp();
 
     client.create_program_release_schedule(
+        &recipient,
         &10_000_0000000,
         &now,
-        &recipient,
     );
 
     let recipient2 = Address::generate(&env);
     client.create_program_release_schedule(
+        &recipient2,
         &15_000_0000000,
         &(now + 1000),
-        &recipient2,
     );
 
     let due = client.get_due_schedules();
@@ -1307,9 +1405,9 @@ fn test_total_scheduled_amount() {
     let r2 = Address::generate(&env);
     let r3 = Address::generate(&env);
 
-    client.create_program_release_schedule(&10_000_0000000, &future_timestamp, &r1);
-    client.create_program_release_schedule(&20_000_0000000, &(future_timestamp + 100), &r2);
-    client.create_program_release_schedule(&15_000_0000000, &(future_timestamp + 200), &r3);
+    client.create_program_release_schedule(&r1, &10_000_0000000, &future_timestamp);
+    client.create_program_release_schedule(&r2, &20_000_0000000, &(future_timestamp + 100));
+    client.create_program_release_schedule(&r3, &15_000_0000000, &(future_timestamp + 200));
 
     let total_scheduled = client.get_total_scheduled_amount();
     assert_eq!(total_scheduled, 45_000_0000000i128);
@@ -1336,7 +1434,7 @@ fn test_comprehensive_analytics_workflow() {
 
     let future_timestamp = env.ledger().timestamp() + 100;
     let r4 = Address::generate(&env);
-    client.create_program_release_schedule(&25_000_0000000, &future_timestamp, &r4);
+    client.create_program_release_schedule(&r4, &25_000_0000000, &future_timestamp);
 
     env.ledger().set_timestamp(future_timestamp + 1);
     client.trigger_program_releases();
@@ -1363,9 +1461,9 @@ fn test_analytics_partial_release_scenario() {
     for i in 0..3 {
         let recipient = Address::generate(&env);
         client.create_program_release_schedule(
+            &recipient,
             &10_000_0000000,
             &(future_timestamp + (i as u64 * 10)),
-            &recipient,
         );
     }
 
@@ -1419,6 +1517,29 @@ fn test_analytics_query_functions() {
     let payouts_range = client.query_payouts_by_amount(&12_000_0000000, &18_000_0000000, &0, &10);
     assert_eq!(payouts_range.len(), 1);
     assert_eq!(payouts_range.get(0).unwrap().amount, 15_000_0000000);
+}
+
+// Test (#493): metrics reflect real operations — total operations, success counts
+#[test]
+fn test_analytics_metrics_match_operation_counts() {
+    let env = Env::default();
+    let initial_funds = 100_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    client.single_payout(&r1, &10_000_0000000);
+    client.single_payout(&r2, &20_000_0000000);
+
+    let recipients = vec![&env, Address::generate(&env)];
+    let amounts = vec![&env, 5_000_0000000i128];
+    client.batch_payout(&recipients, &amounts);
+
+    let stats = client.get_program_aggregate_stats();
+    assert_eq!(stats.payout_count, 3);
+    assert_eq!(stats.total_paid_out, 35_000_0000000i128);
+    assert_eq!(stats.remaining_balance, 65_000_0000000i128);
+    assert_eq!(stats.total_funds, 100_000_0000000i128);
 }
 
 // =============================================================================
@@ -1878,9 +1999,9 @@ fn test_query_schedules_by_status_pending_vs_released() {
     let r2 = Address::generate(&env);
     let r3 = Address::generate(&env);
 
-    client.create_program_release_schedule(&50_000, &(now + 100), &r1);
-    client.create_program_release_schedule(&50_000, &(now + 200), &r2);
-    client.create_program_release_schedule(&50_000, &(now + 300), &r3);
+    client.create_program_release_schedule(&r1, &50_000, &(now + 100));
+    client.create_program_release_schedule(&r2, &50_000, &(now + 200));
+    client.create_program_release_schedule(&r3, &50_000, &(now + 300));
 
     // Trigger first two schedules
     env.ledger().set_timestamp(now + 250);
@@ -1908,9 +2029,9 @@ fn test_query_schedules_by_recipient_returns_correct_subset() {
     let winner = Address::generate(&env);
     let other = Address::generate(&env);
 
-    client.create_program_release_schedule(&100_000, &(now + 100), &winner);
-    client.create_program_release_schedule(&50_000, &(now + 200), &other);
-    client.create_program_release_schedule(&50_000, &(now + 300), &winner);
+    client.create_program_release_schedule(&winner, &100_000, &(now + 100));
+    client.create_program_release_schedule(&other, &50_000, &(now + 200));
+    client.create_program_release_schedule(&winner, &50_000, &(now + 300));
 
     let winner_schedules = client.query_schedules_by_recipient(&winner, &0, &10);
     assert_eq!(winner_schedules.len(), 2);
@@ -1945,4 +2066,47 @@ for r in records.iter() {
     }
 }
 assert_eq!(large_amounts.get(0).unwrap().amount, 200_000);
+}
+
+// =============================================================================
+// TESTS FOR PROGRAM RELEASE SCHEDULES ACROSS UPGRADES (#497)
+// =============================================================================
+
+/// Create schedules on "version N", then continue automatic and manual releases
+/// without re-init (simulated post-upgrade) and verify no data loss.
+#[test]
+fn test_release_schedules_persist_after_simulated_upgrade() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 200_000);
+
+    let now = env.ledger().timestamp();
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    client.create_program_release_schedule(&r1, &50_000, &(now + 100));
+    client.create_program_release_schedule(&r2, &50_000, &(now + 200));
+
+    let schedules_before = client.get_all_prog_release_schedules();
+    assert_eq!(schedules_before.len(), 2);
+
+    env.ledger().set_timestamp(now + 150);
+    client.trigger_program_releases();
+
+    let schedules_after = client.get_all_prog_release_schedules();
+    assert_eq!(schedules_after.len(), 2);
+    let released_count = schedules_after.iter().filter(|s| s.released).count();
+    assert_eq!(released_count, 1);
+
+    let stats = client.get_program_aggregate_stats();
+    assert_eq!(stats.released_count, 1);
+    assert_eq!(stats.scheduled_count, 1);
+    assert_eq!(stats.remaining_balance, 150_000);
+
+    env.ledger().set_timestamp(now + 250);
+    client.trigger_program_releases();
+
+    let stats_final = client.get_program_aggregate_stats();
+    assert_eq!(stats_final.released_count, 2);
+    assert_eq!(stats_final.scheduled_count, 0);
+    assert_eq!(stats_final.remaining_balance, 100_000);
 }

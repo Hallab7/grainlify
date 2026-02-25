@@ -116,7 +116,7 @@
                     "storage": [
                       {
                         "key": {
-                          "symbol": "FeeConf"
+                          "symbol": "FeeCfg"
                         },
                         "val": {
                           "map": [
@@ -163,7 +163,7 @@
                       },
                       {
                         "key": {
-                          "symbol": "ProgReg2"
+                          "symbol": "ProgReg"
                         },
                         "val": {
                           "vec": [
@@ -352,7 +352,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "PrgReg"
+                "symbol": "ProgRgd"
               }
             ],
             "data": {

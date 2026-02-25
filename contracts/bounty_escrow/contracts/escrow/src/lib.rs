@@ -1874,7 +1874,11 @@ impl BountyEscrowContract {
 
     /// NEW: Verify escrow invariants for a specific bounty
     pub fn verify_state(env: Env, bounty_id: u64) -> bool {
-        if let Some(escrow) = env.storage().persistent().get::<DataKey, Escrow>(&DataKey::Escrow(bounty_id)) {
+        if let Some(escrow) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Escrow>(&DataKey::Escrow(bounty_id))
+        {
             invariants::verify_escrow_invariants(&escrow)
         } else {
             false

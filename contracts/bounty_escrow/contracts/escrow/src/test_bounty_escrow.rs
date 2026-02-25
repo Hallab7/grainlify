@@ -1202,3 +1202,36 @@ fn test_one_above_maximum_boundary_rejected() {
     // 10_001 == max(10_000) + 1 → must be rejected.
     client.lock_funds(&depositor, &10, &10_001_i128, &deadline);
 }
+
+/// (#501) Create many bounties (bounded for CI) and ensure counts and sampling
+/// queries remain accurate without index/key collisions.
+#[test]
+fn test_max_bounty_count_queries_accurate() {
+    let (env, client, _) = create_test_env();
+    let admin = Address::generate(&env);
+    let depositor = Address::generate(&env);
+    let deadline = env.ledger().timestamp() + 1000;
+
+    env.mock_all_auths();
+
+    let token_admin = Address::generate(&env);
+    let (token, _token_client, token_admin_client) = create_token_contract(&env, &token_admin);
+    client.init(&admin, &token);
+
+    const N: u64 = 15;
+    let total: i128 = 100 * (N as i128);
+    token_admin_client.mint(&depositor, &total);
+
+    for i in 1..=N {
+        client.lock_funds(&depositor, &i, &100_i128, &deadline);
+    }
+
+    assert_eq!(client.get_escrow_count(), N as u32);
+
+    let first = client.get_escrow_info(&1);
+    assert_eq!(first.amount, 100);
+    let mid = client.get_escrow_info(&(N / 2));
+    assert_eq!(mid.amount, 100);
+    let last = client.get_escrow_info(&N);
+    assert_eq!(last.amount, 100);
+}

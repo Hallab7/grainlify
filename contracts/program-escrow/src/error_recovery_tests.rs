@@ -350,37 +350,42 @@ fn test_reopen_after_half_open_failure_rejects_immediately() {
     });
 }
 
-// #[test]
-// fn test_half_open_can_be_reset_again_after_reopen() {
-//     let (env, admin, contract_id) = setup_with_admin(2);
-//     simulate_failures(&env, &contract_id, 2);
-//     env.as_contract(&contract_id, || {
-//         reset_circuit_breaker(&env, &admin);
-//         let prog = String::from_str(&env, "TestProg");
-//         record_failure(&env, prog, symbol_short!("op"), ERR_TRANSFER_FAILED);
-//         assert_eq!(get_state(&env), CircuitState::Open);
-//         reset_circuit_breaker(&env, &admin);
-//         assert_eq!(get_state(&env), CircuitState::HalfOpen);
-//         record_success(&env);
-//         assert_eq!(get_state(&env), CircuitState::Closed);
-//     });
-// }
+#[test]
+fn test_half_open_can_be_reset_again_after_reopen() {
+    let (env, admin, contract_id) = setup_with_admin(2);
+    simulate_failures(&env, &contract_id, 2);
+    env.as_contract(&contract_id, || {
+        reset_circuit_breaker(&env, &admin);
+        let prog = String::from_str(&env, "TestProg");
+        record_failure(&env, prog, symbol_short!("op"), ERR_TRANSFER_FAILED);
+        assert_eq!(get_state(&env), CircuitState::Open);
+    });
+    env.as_contract(&contract_id, || {
+        reset_circuit_breaker(&env, &admin);
+        assert_eq!(get_state(&env), CircuitState::HalfOpen);
+        record_success(&env);
+        assert_eq!(get_state(&env), CircuitState::Closed);
+    });
+}
 
 // ─────────────────────────────────────────────────────────
 // 8. Hard reset: HalfOpen / Closed → Closed
 // ─────────────────────────────────────────────────────────
 
-// #[test]
-// fn test_reset_half_open_goes_to_closed() {
-//     let (env, admin, contract_id) = setup_with_admin(2);
-//     simulate_failures(&env, &contract_id, 2);
-//     env.as_contract(&contract_id, || {
-//         reset_circuit_breaker(&env, &admin); // Open → HalfOpen
-//         reset_circuit_breaker(&env, &admin); // HalfOpen → Closed
-//         assert_eq!(get_state(&env), CircuitState::Closed);
-//         assert_eq!(get_failure_count(&env), 0);
-//     });
-// }
+#[test]
+fn test_reset_half_open_goes_to_closed() {
+    let (env, admin, contract_id) = setup_with_admin(2);
+    simulate_failures(&env, &contract_id, 2);
+    env.as_contract(&contract_id, || {
+        reset_circuit_breaker(&env, &admin); // Open → HalfOpen
+        assert_eq!(get_state(&env), CircuitState::HalfOpen);
+    });
+    env.as_contract(&contract_id, || {
+        reset_circuit_breaker(&env, &admin); // HalfOpen → Closed
+        assert_eq!(get_state(&env), CircuitState::Closed);
+        assert_eq!(get_failure_count(&env), 0);
+    });
+}
 
 #[test]
 fn test_reset_from_closed_stays_closed() {
@@ -633,73 +638,130 @@ fn test_get_config_returns_set_values() {
 // 14. Full state machine walkthrough
 // ─────────────────────────────────────────────────────────
 
-// #[test]
-// fn test_full_circuit_breaker_lifecycle() {
-//     let (env, contract_id) = setup_env();
-//     let admin = Address::generate(&env);
-//     env.as_contract(&contract_id, || {
-//         set_circuit_admin(&env, admin.clone(), None);
-//         set_config(
-//             &env,
-//             CircuitBreakerConfig {
-//                 failure_threshold: 3,
-//                 success_threshold: 1,
-//                 max_error_log: 10,
-//             },
-//         );
-//     });
+#[test]
+fn test_full_circuit_breaker_lifecycle() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        set_circuit_admin(&env, admin.clone(), None);
+        set_config(
+            &env,
+            CircuitBreakerConfig {
+                failure_threshold: 3,
+                success_threshold: 1,
+                max_error_log: 10,
+            },
+        );
+    });
 
-//     env.as_contract(&contract_id, || {
-//         // Phase 1: Normal operation
-//         assert_eq!(get_state(&env), CircuitState::Closed);
-//         assert!(check_and_allow(&env).is_ok());
-//         record_success(&env);
-//         assert_eq!(get_failure_count(&env), 0);
-//     });
+    env.as_contract(&contract_id, || {
+        // Phase 1: Normal operation
+        assert_eq!(get_state(&env), CircuitState::Closed);
+        assert!(check_and_allow(&env).is_ok());
+        record_success(&env);
+        assert_eq!(get_failure_count(&env), 0);
+    });
 
-//     simulate_failures(&env, &contract_id, 2);
+    simulate_failures(&env, &contract_id, 2);
 
-//     env.as_contract(&contract_id, || {
-//         // Phase 2: Partial failures
-//         assert_eq!(get_state(&env), CircuitState::Closed);
-//         assert_eq!(get_failure_count(&env), 2);
-//         assert!(check_and_allow(&env).is_ok());
-//     });
+    env.as_contract(&contract_id, || {
+        // Phase 2: Partial failures
+        assert_eq!(get_state(&env), CircuitState::Closed);
+        assert_eq!(get_failure_count(&env), 2);
+        assert!(check_and_allow(&env).is_ok());
+    });
 
-//     simulate_failures(&env, &contract_id, 1);
+    simulate_failures(&env, &contract_id, 1);
 
-//     env.as_contract(&contract_id, || {
-//         // Phase 3: Threshold hit
-//         assert_eq!(get_state(&env), CircuitState::Open);
-//         assert_eq!(check_and_allow(&env), Err(ERR_CIRCUIT_OPEN));
+    env.as_contract(&contract_id, || {
+        // Phase 3: Threshold hit
+        assert_eq!(get_state(&env), CircuitState::Open);
+        assert_eq!(check_and_allow(&env), Err(ERR_CIRCUIT_OPEN));
 
-//         // Phase 4: Admin resets
-//         env.ledger().set_timestamp(2000);
-//         reset_circuit_breaker(&env, &admin);
-//         assert_eq!(get_state(&env), CircuitState::HalfOpen);
-//         assert!(check_and_allow(&env).is_ok());
+        // Phase 4: Admin resets (first reset — own frame for require_auth)
+        env.ledger().set_timestamp(2000);
+        reset_circuit_breaker(&env, &admin);
+        assert_eq!(get_state(&env), CircuitState::HalfOpen);
+        assert!(check_and_allow(&env).is_ok());
+    });
 
-//         // Phase 5: Failure in HalfOpen
-//         let prog = String::from_str(&env, "TestProg");
-//         record_failure(&env, prog.clone(), symbol_short!("op"), ERR_TRANSFER_FAILED);
-//         assert_eq!(get_state(&env), CircuitState::Open);
-//         assert_eq!(check_and_allow(&env), Err(ERR_CIRCUIT_OPEN));
+    env.as_contract(&contract_id, || {
+        // Phase 5: Failure in HalfOpen
+        let prog = String::from_str(&env, "TestProg");
+        record_failure(&env, prog.clone(), symbol_short!("op"), ERR_TRANSFER_FAILED);
+        assert_eq!(get_state(&env), CircuitState::Open);
+        assert_eq!(check_and_allow(&env), Err(ERR_CIRCUIT_OPEN));
+    });
 
-//         // Phase 6: Admin resets again
-//         reset_circuit_breaker(&env, &admin);
-//         assert_eq!(get_state(&env), CircuitState::HalfOpen);
+    env.as_contract(&contract_id, || {
+        // Phase 6: Admin resets again (second reset — own frame for require_auth)
+        reset_circuit_breaker(&env, &admin);
+        assert_eq!(get_state(&env), CircuitState::HalfOpen);
 
-//         // Phase 7: Success closes
-//         record_success(&env);
-//         assert_eq!(get_state(&env), CircuitState::Closed);
-//         assert_eq!(get_failure_count(&env), 0);
-//         assert!(check_and_allow(&env).is_ok());
+        // Phase 7: Success closes
+        record_success(&env);
+        assert_eq!(get_state(&env), CircuitState::Closed);
+        assert_eq!(get_failure_count(&env), 0);
+        assert!(check_and_allow(&env).is_ok());
 
-//         // Phase 8: Error log has entries
-//         let log = get_error_log(&env);
-//         assert!(log.len() > 0, "Error log should contain entries from failures");
-//     });
-// }
+        // Phase 8: Error log has entries
+        let log = get_error_log(&env);
+        assert!(log.len() > 0, "Error log should contain entries from failures");
+    });
+}
+
+// ─────────────────────────────────────────────────────────
+// 14b. Circuit stays open until reset (no auto-recovery)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_circuit_stays_open_until_admin_reset() {
+    let (env, _admin, contract_id) = setup_with_admin(2);
+    simulate_failures(&env, &contract_id, 2);
+    env.as_contract(&contract_id, || {
+        assert_eq!(get_state(&env), CircuitState::Open);
+        // Advance time — circuit does not auto-close
+        env.ledger().set_timestamp(100_000);
+        assert_eq!(get_state(&env), CircuitState::Open);
+        assert_eq!(check_and_allow(&env), Err(ERR_CIRCUIT_OPEN));
+        // Multiple check_and_allow calls still reject
+        for _ in 0..20 {
+            assert_eq!(check_and_allow(&env), Err(ERR_CIRCUIT_OPEN));
+        }
+    });
+}
+
+#[test]
+fn test_reset_circuit_breaker_state_checks_open_to_half_open() {
+    let (env, admin, contract_id) = setup_with_admin(3);
+    simulate_failures(&env, &contract_id, 3);
+    env.as_contract(&contract_id, || {
+        let status_before = get_status(&env);
+        assert_eq!(status_before.state, CircuitState::Open);
+        assert!(status_before.failure_count >= 3);
+
+        reset_circuit_breaker(&env, &admin);
+
+        let status_after = get_status(&env);
+        assert_eq!(status_after.state, CircuitState::HalfOpen);
+        assert_eq!(status_after.success_count, 0);
+    });
+}
+
+#[test]
+fn test_reset_circuit_breaker_state_checks_successful_recovery_to_closed() {
+    let (env, admin, contract_id) = setup_with_admin(2);
+    simulate_failures(&env, &contract_id, 2);
+    env.as_contract(&contract_id, || {
+        reset_circuit_breaker(&env, &admin);
+        assert_eq!(get_state(&env), CircuitState::HalfOpen);
+        record_success(&env);
+        let status = get_status(&env);
+        assert_eq!(status.state, CircuitState::Closed);
+        assert_eq!(status.failure_count, 0);
+        assert_eq!(status.opened_at, 0);
+    });
+}
 
 // ─────────────────────────────────────────────────────────
 // 15. Status snapshot is accurate

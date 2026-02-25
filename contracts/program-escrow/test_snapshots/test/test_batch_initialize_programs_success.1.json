@@ -5,7 +5,6 @@
   },
   "auth": [
     [],
-    [],
     []
   ],
   "ledger": {
@@ -189,7 +188,7 @@
                     "storage": [
                       {
                         "key": {
-                          "symbol": "FeeConf"
+                          "symbol": "FeeCfg"
                         },
                         "val": {
                           "map": [
@@ -236,7 +235,7 @@
                       },
                       {
                         "key": {
-                          "symbol": "ProgReg2"
+                          "symbol": "ProgReg"
                         },
                         "val": {
                           "vec": [
@@ -537,7 +536,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "PrgReg"
+                "symbol": "ProgRgd"
               }
             ],
             "data": {
@@ -573,7 +572,7 @@
           "v0": {
             "topics": [
               {
-                "symbol": "PrgReg"
+                "symbol": "ProgRgd"
               }
             ],
             "data": {
@@ -638,12 +637,10 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "program_exists_by_id"
+                "symbol": "program_exists"
               }
             ],
-            "data": {
-              "string": "prog-1"
-            }
+            "data": "void"
           }
         }
       },
@@ -661,56 +658,7 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "program_exists_by_id"
-              }
-            ],
-            "data": {
-              "bool": true
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": null,
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_call"
-              },
-              {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
-                "symbol": "program_exists_by_id"
-              }
-            ],
-            "data": {
-              "string": "prog-2"
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "program_exists_by_id"
+                "symbol": "program_exists"
               }
             ],
             "data": {

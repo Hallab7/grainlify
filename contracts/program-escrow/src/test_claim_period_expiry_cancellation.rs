@@ -64,12 +64,12 @@ fn setup<'a>() -> TestSetup<'a> {
     let program_id = String::from_str(&env, "TestProgram2024");
 
     // initialize program
-    client.init_program(&program_id, &payout_key, &token.address);
+    client.init_program(&program_id, &payout_key, &token.address, &payout_key, &None);
 
     // lock funds
     client.lock_program_funds(&500_000_i128);
 
-    client.initialize_contract(&admin);
+    client.set_admin(&admin);
 
     //  ledger timestamp
     env.ledger().set(LedgerInfo {

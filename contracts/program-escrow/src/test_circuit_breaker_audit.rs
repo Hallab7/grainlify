@@ -8,7 +8,7 @@ mod test {
         let contract_id = env.register_contract(None, ProgramEscrowContract);
         let client = ProgramEscrowContractClient::new(env, &contract_id);
         let admin = Address::generate(env);
-        client.initialize_contract(admin.clone());
+        client.initialize_contract(&admin);
         client.set_circuit_admin(&admin, &None);
         (client, admin)
     }
