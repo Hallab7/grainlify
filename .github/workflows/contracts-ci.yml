@@ -24,21 +24,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          source $HOME/.cargo/env
+      - name: Setup Rust (with Soroban target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none
 
-      - name: Install Rust target for Soroban
+      - name: Install Stellar CLI
         run: |
-          source $HOME/.cargo/env
-          rustup target add wasm32v1-none
-
-      - name: Install Stellar CLI with Homebrew
-        run: |
-          brew update
-          brew install stellar-cli
-          stellar --version
+          VERSION="22.5.0"
+          ARCH="$(uname -m)"
+          case "$ARCH" in
+            arm64|aarch64) TARGET="aarch64-apple-darwin" ;;
+            x86_64) TARGET="x86_64-apple-darwin" ;;
+            *) echo "Unsupported macOS architecture: $ARCH" && exit 1 ;;
+          esac
+          URL="https://github.com/stellar/stellar-cli/releases/download/v${VERSION}/stellar-cli-${VERSION}-${TARGET}.tar.gz"
+          curl -fL "$URL" -o stellar-cli.tar.gz
+          tar -xzf stellar-cli.tar.gz
+          mkdir -p "$HOME/.local/bin"
+          mv stellar "$HOME/.local/bin/stellar"
+          chmod +x "$HOME/.local/bin/stellar"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/stellar" --version
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v4

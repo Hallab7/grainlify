@@ -356,6 +356,9 @@ mod anti_abuse {
 const MAX_FEE_RATE: i128 = token_math::MAX_FEE_RATE;
 const MAX_BATCH_SIZE: u32 = 20;
 
+extern crate grainlify_core;
+use grainlify_core::asset;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -395,6 +398,7 @@ pub enum Error {
     CapabilityAmountExceeded = 27,
     CapabilityUsesExhausted = 28,
     CapabilityExceedsAuthority = 29,
+    InvalidAssetId = 30,
 }
 
 #[contracttype]
@@ -625,19 +629,23 @@ pub struct BountyEscrowContract;
 #[contractimpl]
 impl BountyEscrowContract {
     /// Initialize the contract with the admin address and the token address (XLM).
-    pub fn init(env: Env, admin: Address, token: Address) -> Result<(), Error> {
+    pub fn init(env: Env, admin: Address, token: asset::AssetId) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
+        let normalized_token =
+            asset::normalize_asset_id(&env, &token).map_err(|_| Error::InvalidAssetId)?;
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Token, &token);
+        env.storage()
+            .instance()
+            .set(&DataKey::Token, &normalized_token);
 
         emit_bounty_initialized(
             &env,
             BountyEscrowInitialized {
                 version: EVENT_VERSION_V2,
                 admin,
-                token,
+                token: normalized_token,
                 timestamp: env.ledger().timestamp(),
             },
         );

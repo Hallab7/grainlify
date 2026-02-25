@@ -386,6 +386,9 @@ use soroban_sdk::{
     String, Symbol, Vec,
 };
 
+extern crate grainlify_core;
+use grainlify_core::{asset, nonce};
+
 // Event types
 const PROGRAM_INITIALIZED: Symbol = symbol_short!("PrgInit");
 const FUNDS_LOCKED: Symbol = symbol_short!("FndsLock");
