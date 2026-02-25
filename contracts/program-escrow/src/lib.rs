@@ -155,7 +155,7 @@ impl ProgramEscrowContract {
             panic!("Recipients and amounts vectors must have the same length");
         }
 
-        if recipients.len() == 0 {
+        if recipients.is_empty() {
             panic!("Cannot process empty batch");
         }
 
@@ -210,7 +210,7 @@ impl ProgramEscrowContract {
             (BATCH_PAYOUT,),
             (
                 updated_data.program_id.clone(),
-                recipients.len() as u32,
+                recipients.len(),
                 total_payout,
                 updated_data.remaining_balance,
             ),
