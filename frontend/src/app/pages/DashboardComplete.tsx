@@ -101,9 +101,6 @@ export function DashboardComplete() {
     { id: 'blog', icon: FileText, label: 'Grainlify Blog' },
   ];
 
-  // Add Admin menu item for all users (requires password)
-  navItems.push({ id: 'admin', icon: Shield, label: 'Admin Panel' });
-
   return (
     <div className={`min-h-screen relative overflow-hidden transition-colors ${
       theme === 'dark'
@@ -171,7 +168,7 @@ export function DashboardComplete() {
                 return (
                   <button
                     key={item.id}
-                    onClick={() => item.id === 'admin' ? handleAdminClick() : setCurrentPage(item.id)}
+                    onClick={() => setCurrentPage(item.id)}
                     className={`group w-full flex items-center rounded-[12px] transition-all duration-300 ${
                       isSidebarCollapsed ? 'justify-center px-0 py-4' : 'justify-start px-3 py-2.5'
                     } ${
@@ -595,7 +592,7 @@ function DiscoverPage() {
       }`}
     >
       {/* Header */}
-      <div className="flex items-start justify-between mb-3 gap-3">
+      <div className="flex items-start justify-between mb-3 gap-3 min-h-[3.5rem]">
         <h4
           className={`text-[16px] font-semibold leading-snug line-clamp-2 ${
             theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'

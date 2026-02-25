@@ -60,8 +60,8 @@ export function IssueCard({
             : 'bg-white/[0.15] border-white/25 hover:bg-white/[0.2]'
         }`}
       >
-        <div className="flex items-start justify-between mb-3">
-          <h4 className={`text-[16px] font-semibold transition-colors ${
+        <div className="flex items-start justify-between mb-2">
+          <h4 className={`text-[16px] font-semibold leading-6 min-h-[3rem] line-clamp-2 transition-colors ${
             isDark ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
           }`}>{title}</h4>
           {primaryTag && (
@@ -110,7 +110,9 @@ export function IssueCard({
       onClick={onClick}
       className={`w-full p-3 rounded-[16px] backdrop-blur-[40px] border transition-all text-left ${
         isSelected
-          ? 'border-[#c9983a] bg-[#c9983a]/10'
+          ? isDark
+            ? 'border-[#c9983a] bg-[#c9983a]/10'
+            : 'border-2 border-[#c9983a] bg-gradient-to-br from-[#c9983a]/20 to-[#d4af37]/15 shadow-sm hover:from-[#c9983a]/25 hover:to-[#d4af37]/20'
           : isDark
             ? 'bg-white/[0.12] border-white/20 hover:bg-white/[0.15]'
             : 'bg-white/[0.12] border-white/20 hover:bg-white/[0.15]'

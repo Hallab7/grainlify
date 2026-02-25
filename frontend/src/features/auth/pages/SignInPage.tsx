@@ -9,6 +9,13 @@ export function SignInPage() {
   const navigate = useNavigate();
   const [isRedirecting, setIsRedirecting] = useState(false);
 
+  // Persist returnTo so after OAuth we can redirect back to the intended page (e.g. dashboard?tab=browse&project=...&issue=...)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const returnTo = params.get('returnTo');
+    if (returnTo) sessionStorage.setItem('authReturnTo', returnTo);
+  }, []);
+
   // Check for OAuth callback token in URL (fallback for wrong redirect URL)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -20,14 +27,22 @@ export function SignInPage() {
     }
   }, [navigate]);
 
-  const handleGitHubSignIn = () => {
-    console.log('Sign in button clicked');
-    setIsRedirecting(true);
-    const githubUrl = getGitHubLoginUrl();
-    console.log('Redirecting to:', githubUrl);
-    // Redirect to GitHub OAuth
-    window.location.href = githubUrl;
-  };
+  const handleGithubSign = async () => {
+        setLoading(true);
+            try {
+                    const provider = new GithubAuthProvider();
+                            console.log("sign in false ",false)
+                                    const github1 = await signInWithPopup(auth, provider);
+                                            console.log("Redirecting to :", github1);
+                                                    // subject to github login
+                                                            window.location.href = github1;
+
+                                                                } catch (error) {
+                                                                        console.log(error);
+                                                                            }
+                                                                            };
+
+  
 
   return (
     <div className={`min-h-screen flex items-center justify-center px-6 relative overflow-hidden transition-colors ${

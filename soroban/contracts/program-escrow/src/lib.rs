@@ -1,55 +1,56 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, vec, Address, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, Env, String, Vec,
 };
 
-mod nonce {
-    use soroban_sdk::{contracttype, Address, Env};
+const MAX_BATCH_SIZE: u32 = 20;
 
-    #[contracttype]
-    pub enum NonceKey {
-        Signer(Address),
-    }
-
-    pub fn get_nonce(env: &Env, signer: &Address) -> u64 {
-        let key = NonceKey::Signer(signer.clone());
-        env.storage().persistent().get(&key).unwrap_or(0)
-    }
-
-    pub fn validate_and_increment_nonce(env: &Env, signer: &Address, provided_nonce: u64) {
-        let current_nonce = get_nonce(env, signer);
-        
-        if provided_nonce != current_nonce {
-            panic!("Invalid nonce: expected {}, got {}", current_nonce, provided_nonce);
-        }
-        
-        let key = NonceKey::Signer(signer.clone());
-        env.storage().persistent().set(&key, &(current_nonce + 1));
-    }
-}
-
-const PROGRAM_INITIALIZED: Symbol = symbol_short!("InitProg");
-const FUNDS_LOCKED: Symbol = symbol_short!("Locked");
-const PAYOUT: Symbol = symbol_short!("Payout");
-
-const PROGRAM_DATA: Symbol = symbol_short!("ProgData");
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PayoutRecord {
-    pub recipient: Address,
-    pub amount: i128,
-    pub timestamp: u64,
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    ProgramExists = 3,
+    ProgramNotFound = 4,
+    Unauthorized = 5,
+    InvalidBatchSize = 6,
+    DuplicateProgramId = 7,
+    InvalidAmount = 8,
+    InvalidName = 9,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProgramData {
-    pub program_id: String,
-    pub total_funds: i128,
-    pub remaining_balance: i128,
-    pub authorized_payout_key: Address,
-    pub payout_history: Vec<PayoutRecord>,
+pub enum ProgramStatus {
+    Active,
+    Completed,
+    Cancelled,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Program {
+    pub admin: Address,
+    pub name: String,
+    pub total_funding: i128,
+    pub status: ProgramStatus,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramRegistrationItem {
+    pub program_id: u64,
+    pub admin: Address,
+    pub name: String,
+    pub total_funding: i128,
+}
+
+#[contracttype]
+pub enum DataKey {
+    Admin,
+    Token,
+    Program(u64),
 }
 
 #[contract]
@@ -57,147 +58,166 @@ pub struct ProgramEscrowContract;
 
 #[contractimpl]
 impl ProgramEscrowContract {
-    /// Initialize a new program escrow
-    pub fn init_program(
+    /// Initialize the contract with an admin and token address. Call once.
+    pub fn init(env: Env, admin: Address, token: Address) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::AlreadyInitialized);
+        }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Token, &token);
+        Ok(())
+    }
+
+    /// Register a single program.
+    pub fn register_program(
         env: Env,
-        program_id: String,
-        authorized_payout_key: Address,
-    ) -> ProgramData {
-        if env.storage().instance().has(&PROGRAM_DATA) {
-            panic!("Program already initialized");
+        program_id: u64,
+        admin: Address,
+        name: String,
+        total_funding: i128,
+    ) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
         }
+        let contract_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        contract_admin.require_auth();
 
-        let program_data = ProgramData {
-            program_id: program_id.clone(),
-            total_funds: 0,
-            remaining_balance: 0,
-            authorized_payout_key: authorized_payout_key.clone(),
-            payout_history: vec![&env],
-        };
-
-        env.storage().instance().set(&PROGRAM_DATA, &program_data);
-
-        env.events().publish(
-            (PROGRAM_INITIALIZED,),
-            (program_id, authorized_payout_key, 0i128),
-        );
-
-        program_data
-    }
-
-    /// Lock initial funds into the program escrow
-    pub fn lock_program_funds(env: Env, amount: i128) -> ProgramData {
-        if amount <= 0 {
-            panic!("Amount must be greater than zero");
-        }
-
-        let mut program_data: ProgramData = env
+        if env
             .storage()
-            .instance()
-            .get(&PROGRAM_DATA)
-            .unwrap_or_else(|| panic!("Program not initialized"));
-
-        program_data.total_funds += amount;
-        program_data.remaining_balance += amount;
-
-        env.storage().instance().set(&PROGRAM_DATA, &program_data);
-
-        env.events().publish(
-            (FUNDS_LOCKED,),
-            (
-                program_data.program_id.clone(),
-                amount,
-                program_data.remaining_balance,
-            ),
-        );
-
-        program_data
-    }
-
-    /// Execute a single payout to one recipient with nonce-based replay protection
-    /// 
-    /// # Arguments
-    /// * `recipient` - Address of the recipient
-    /// * `amount` - Amount to transfer
-    /// * `nonce` - Nonce for replay protection
-    /// 
-    /// # Returns
-    /// Updated ProgramData after payout
-    pub fn single_payout(env: Env, recipient: Address, amount: i128, nonce: u64) -> ProgramData {
-        let program_data: ProgramData = env
-            .storage()
-            .instance()
-            .get(&PROGRAM_DATA)
-            .unwrap_or_else(|| panic!("Program not initialized"));
-
-        // Require authorization from the authorized payout key
-        program_data.authorized_payout_key.require_auth();
-        
-        // Validate and increment nonce to prevent replay
-        nonce::validate_and_increment_nonce(&env, &program_data.authorized_payout_key, nonce);
-
-        if amount <= 0 {
-            panic!("Amount must be greater than zero");
+            .persistent()
+            .has(&DataKey::Program(program_id))
+        {
+            return Err(Error::ProgramExists);
+        }
+        if total_funding <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if name.len() == 0 {
+            return Err(Error::InvalidName);
         }
 
-        if amount > program_data.remaining_balance {
-            panic!("Insufficient balance: requested {}, available {}", 
-                amount, program_data.remaining_balance);
-        }
+        // Transfer funding from the program admin to the contract
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token_client = token::Client::new(&env, &token_addr);
+        admin.require_auth();
+        token_client.transfer(&admin, &env.current_contract_address(), &total_funding);
 
-        // Record payout
-        let timestamp = env.ledger().timestamp();
-        let payout_record = PayoutRecord {
-            recipient: recipient.clone(),
-            amount,
-            timestamp,
+        let program = Program {
+            admin,
+            name,
+            total_funding,
+            status: ProgramStatus::Active,
         };
-
-        let mut updated_history = program_data.payout_history.clone();
-        updated_history.push_back(payout_record);
-
-        // Update program data
-        let mut updated_data = program_data.clone();
-        updated_data.remaining_balance -= amount;
-        updated_data.payout_history = updated_history;
-
-        env.storage().instance().set(&PROGRAM_DATA, &updated_data);
-
-        env.events().publish(
-            (PAYOUT,),
-            (
-                updated_data.program_id.clone(),
-                recipient,
-                amount,
-                updated_data.remaining_balance,
-            ),
-        );
-
-        updated_data
-    }
-
-    /// Get program information
-    pub fn get_program_info(env: Env) -> ProgramData {
         env.storage()
-            .instance()
-            .get(&PROGRAM_DATA)
-            .unwrap_or_else(|| panic!("Program not initialized"))
+            .persistent()
+            .set(&DataKey::Program(program_id), &program);
+        Ok(())
     }
 
-    /// Get remaining balance
-    pub fn get_remaining_balance(env: Env) -> i128 {
-        let program_data: ProgramData = env
-            .storage()
-            .instance()
-            .get(&PROGRAM_DATA)
-            .unwrap_or_else(|| panic!("Program not initialized"));
+    /// Batch register multiple programs in a single transaction.
+    ///
+    /// This operation is atomic — if any item fails validation, the entire
+    /// batch is rejected and no programs are registered.
+    ///
+    /// # Errors
+    /// * `InvalidBatchSize` — batch is empty or exceeds `MAX_BATCH_SIZE`
+    /// * `ProgramExists` — a program_id already exists in storage
+    /// * `DuplicateProgramId` — duplicate program_ids within the batch
+    /// * `InvalidAmount` — zero or negative funding amount
+    /// * `InvalidName` — empty program name
+    /// * `NotInitialized` — contract has not been initialized
+    pub fn batch_register_programs(
+        env: Env,
+        items: Vec<ProgramRegistrationItem>,
+    ) -> Result<u32, Error> {
+        let batch_size = items.len() as u32;
+        if batch_size == 0 || batch_size > MAX_BATCH_SIZE {
+            return Err(Error::InvalidBatchSize);
+        }
 
-        program_data.remaining_balance
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let contract_admin: Address =
+            env.storage().instance().get(&DataKey::Admin).unwrap();
+        contract_admin.require_auth();
+
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token_client = token::Client::new(&env, &token_addr);
+        let contract_address = env.current_contract_address();
+
+        // --- Validation pass (all-or-nothing) ---
+        for item in items.iter() {
+            if env
+                .storage()
+                .persistent()
+                .has(&DataKey::Program(item.program_id))
+            {
+                return Err(Error::ProgramExists);
+            }
+            if item.total_funding <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+            if item.name.len() == 0 {
+                return Err(Error::InvalidName);
+            }
+
+            // Detect duplicate program_ids within the batch
+            let mut count = 0u32;
+            for other in items.iter() {
+                if other.program_id == item.program_id {
+                    count += 1;
+                }
+            }
+            if count > 1 {
+                return Err(Error::DuplicateProgramId);
+            }
+        }
+
+        // Collect unique admins and require auth once per admin
+        let mut seen_admins: Vec<Address> = Vec::new(&env);
+        for item in items.iter() {
+            let mut found = false;
+            for seen in seen_admins.iter() {
+                if seen == item.admin {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                seen_admins.push_back(item.admin.clone());
+                item.admin.require_auth();
+            }
+        }
+
+        // --- Processing pass (atomic) ---
+        let mut registered_count = 0u32;
+        for item in items.iter() {
+            token_client.transfer(&item.admin, &contract_address, &item.total_funding);
+
+            let program = Program {
+                admin: item.admin.clone(),
+                name: item.name.clone(),
+                total_funding: item.total_funding,
+                status: ProgramStatus::Active,
+            };
+            env.storage()
+                .persistent()
+                .set(&DataKey::Program(item.program_id), &program);
+
+            registered_count += 1;
+        }
+
+        Ok(registered_count)
     }
-    
-    /// Get current nonce for a signer (for replay protection)
-    pub fn get_nonce(env: Env, signer: Address) -> u64 {
-        nonce::get_nonce(&env, &signer)
+
+    /// Read a program's state.
+    pub fn get_program(env: Env, program_id: u64) -> Result<Program, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Program(program_id))
+            .ok_or(Error::ProgramNotFound)
     }
 }
 

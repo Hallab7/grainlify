@@ -7,7 +7,7 @@ Usage:
   ./scripts/eb_apply_env.sh <eb_environment_name> <path_to_env_file>
 
 Example:
-  ./scripts/eb_apply_env.sh grainlify-api-1 backend/.env
+  ./scripts/eb_apply_env.sh grainlify-api-v1 backend/.env
 EOF
 }
 
@@ -105,5 +105,3 @@ with open(path, "r", encoding="utf-8") as f:
 PY
 
 echo "Done."
-
-
