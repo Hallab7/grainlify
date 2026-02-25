@@ -355,7 +355,7 @@ const MAX_FEE_RATE: i128 = 5_000; // 50% max fee
 const MAX_BATCH_SIZE: u32 = 20;
 
 extern crate grainlify_core;
-use grainlify_core::{asset, nonce};
+use grainlify_core::asset;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -396,6 +396,7 @@ pub enum Error {
     CapabilityAmountExceeded = 27,
     CapabilityUsesExhausted = 28,
     CapabilityExceedsAuthority = 29,
+    InvalidAssetId = 30,
 }
 
 #[contracttype]
@@ -610,14 +611,16 @@ impl BountyEscrowContract {
         let normalized_token =
             asset::normalize_asset_id(&env, &token).map_err(|_| Error::InvalidAssetId)?;
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Token, &token);
+        env.storage()
+            .instance()
+            .set(&DataKey::Token, &normalized_token);
 
         emit_bounty_initialized(
             &env,
             BountyEscrowInitialized {
                 version: EVENT_VERSION_V2,
                 admin,
-                token,
+                token: normalized_token,
                 timestamp: env.ledger().timestamp(),
             },
         );
@@ -723,10 +726,6 @@ impl BountyEscrowContract {
 
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         admin.require_auth();
-        
-        // Validate and increment nonce to prevent replay
-        nonce::validate_and_increment_nonce(&env, &admin, nonce)
-            .map_err(|_| Error::InvalidNonce)?;
 
         let mut flags = Self::get_pause_flags(&env);
         let timestamp = env.ledger().timestamp();
