@@ -1028,6 +1028,23 @@ impl BountyEscrowContract {
         if Self::check_paused(&env, symbol_short!("release")) {
             return Err(Error::FundsPaused);
         }
+
+        // Block direct release while an active dispute (pending claim) exists.
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::PendingClaim(bounty_id))
+        {
+            let claim: ClaimRecord = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PendingClaim(bounty_id))
+                .unwrap();
+            if !claim.claimed {
+                return Err(Error::ClaimPending);
+            }
+        }
+
         let _start = env.ledger().timestamp();
 
         // Ensure contract is initialized
