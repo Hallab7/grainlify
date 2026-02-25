@@ -390,6 +390,13 @@ pub enum Error {
     /// Returned when refund is blocked by a pending claim/dispute
     NotPaused = 21,
     ClaimPending = 22,
+    CapabilityNotFound = 23,
+    CapabilityExpired = 24,
+    CapabilityRevoked = 25,
+    CapabilityActionMismatch = 26,
+    CapabilityAmountExceeded = 27,
+    CapabilityUsesExhausted = 28,
+    CapabilityExceedsAuthority = 29,
 }
 
 #[contracttype]
@@ -440,6 +447,8 @@ pub enum DataKey {
     ClaimWindow,          // u64 seconds (global config)
     PauseFlags,           // PauseFlags struct
     AmountPolicy, // Option<(i128, i128)> — (min_amount, max_amount) set by set_amount_policy
+    CapabilityNonce, // monotonically increasing capability id
+    Capability(u64), // capability_id -> Capability
 }
 
 #[contracttype]
@@ -522,6 +531,28 @@ pub struct ClaimRecord {
     pub amount: i128,
     pub expires_at: u64,
     pub claimed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CapabilityAction {
+    Claim,
+    Release,
+    Refund,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Capability {
+    pub owner: Address,
+    pub holder: Address,
+    pub action: CapabilityAction,
+    pub bounty_id: u64,
+    pub amount_limit: i128,
+    pub remaining_amount: i128,
+    pub expiry: u64,
+    pub remaining_uses: u32,
+    pub revoked: bool,
 }
 
 #[contracttype]
@@ -817,6 +848,333 @@ impl BountyEscrowContract {
             return flags.refund_paused;
         }
         false
+    }
+
+    fn next_capability_id(env: &Env) -> u64 {
+        let last_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CapabilityNonce)
+            .unwrap_or(0);
+        let next_id = last_id.saturating_add(1);
+        env.storage()
+            .instance()
+            .set(&DataKey::CapabilityNonce, &next_id);
+        next_id
+    }
+
+    fn load_capability(env: &Env, capability_id: u64) -> Result<Capability, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Capability(capability_id))
+            .ok_or(Error::CapabilityNotFound)
+    }
+
+    fn validate_capability_scope_at_issue(
+        env: &Env,
+        owner: &Address,
+        action: &CapabilityAction,
+        bounty_id: u64,
+        amount_limit: i128,
+    ) -> Result<(), Error> {
+        if amount_limit <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        match action {
+            CapabilityAction::Claim => {
+                let claim: ClaimRecord = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PendingClaim(bounty_id))
+                    .ok_or(Error::BountyNotFound)?;
+                if claim.claimed {
+                    return Err(Error::FundsNotLocked);
+                }
+                if env.ledger().timestamp() > claim.expires_at {
+                    return Err(Error::DeadlineNotPassed);
+                }
+                if claim.recipient != owner.clone() {
+                    return Err(Error::Unauthorized);
+                }
+                if amount_limit > claim.amount {
+                    return Err(Error::CapabilityExceedsAuthority);
+                }
+            }
+            CapabilityAction::Release => {
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Admin)
+                    .ok_or(Error::NotInitialized)?;
+                if admin != owner.clone() {
+                    return Err(Error::Unauthorized);
+                }
+                let escrow: Escrow = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Escrow(bounty_id))
+                    .ok_or(Error::BountyNotFound)?;
+                if escrow.status != EscrowStatus::Locked {
+                    return Err(Error::FundsNotLocked);
+                }
+                if amount_limit > escrow.remaining_amount {
+                    return Err(Error::CapabilityExceedsAuthority);
+                }
+            }
+            CapabilityAction::Refund => {
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Admin)
+                    .ok_or(Error::NotInitialized)?;
+                if admin != owner.clone() {
+                    return Err(Error::Unauthorized);
+                }
+                let escrow: Escrow = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Escrow(bounty_id))
+                    .ok_or(Error::BountyNotFound)?;
+                if escrow.status != EscrowStatus::Locked
+                    && escrow.status != EscrowStatus::PartiallyRefunded
+                {
+                    return Err(Error::FundsNotLocked);
+                }
+                if amount_limit > escrow.remaining_amount {
+                    return Err(Error::CapabilityExceedsAuthority);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn ensure_owner_still_authorized(
+        env: &Env,
+        capability: &Capability,
+        requested_amount: i128,
+    ) -> Result<(), Error> {
+        if requested_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        match capability.action {
+            CapabilityAction::Claim => {
+                let claim: ClaimRecord = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PendingClaim(capability.bounty_id))
+                    .ok_or(Error::BountyNotFound)?;
+                if claim.claimed {
+                    return Err(Error::FundsNotLocked);
+                }
+                if env.ledger().timestamp() > claim.expires_at {
+                    return Err(Error::DeadlineNotPassed);
+                }
+                if claim.recipient != capability.owner {
+                    return Err(Error::Unauthorized);
+                }
+                if requested_amount > claim.amount {
+                    return Err(Error::CapabilityExceedsAuthority);
+                }
+            }
+            CapabilityAction::Release => {
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Admin)
+                    .ok_or(Error::NotInitialized)?;
+                if admin != capability.owner {
+                    return Err(Error::Unauthorized);
+                }
+                let escrow: Escrow = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Escrow(capability.bounty_id))
+                    .ok_or(Error::BountyNotFound)?;
+                if escrow.status != EscrowStatus::Locked {
+                    return Err(Error::FundsNotLocked);
+                }
+                if requested_amount > escrow.remaining_amount {
+                    return Err(Error::CapabilityExceedsAuthority);
+                }
+            }
+            CapabilityAction::Refund => {
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Admin)
+                    .ok_or(Error::NotInitialized)?;
+                if admin != capability.owner {
+                    return Err(Error::Unauthorized);
+                }
+                let escrow: Escrow = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Escrow(capability.bounty_id))
+                    .ok_or(Error::BountyNotFound)?;
+                if escrow.status != EscrowStatus::Locked
+                    && escrow.status != EscrowStatus::PartiallyRefunded
+                {
+                    return Err(Error::FundsNotLocked);
+                }
+                if requested_amount > escrow.remaining_amount {
+                    return Err(Error::CapabilityExceedsAuthority);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn consume_capability(
+        env: &Env,
+        holder: &Address,
+        capability_id: u64,
+        expected_action: CapabilityAction,
+        bounty_id: u64,
+        amount: i128,
+    ) -> Result<Capability, Error> {
+        let mut capability = Self::load_capability(env, capability_id)?;
+
+        if capability.revoked {
+            return Err(Error::CapabilityRevoked);
+        }
+        if capability.action != expected_action {
+            return Err(Error::CapabilityActionMismatch);
+        }
+        if capability.bounty_id != bounty_id {
+            return Err(Error::CapabilityActionMismatch);
+        }
+        if capability.holder != holder.clone() {
+            return Err(Error::Unauthorized);
+        }
+        if env.ledger().timestamp() > capability.expiry {
+            return Err(Error::CapabilityExpired);
+        }
+        if capability.remaining_uses == 0 {
+            return Err(Error::CapabilityUsesExhausted);
+        }
+        if amount > capability.remaining_amount {
+            return Err(Error::CapabilityAmountExceeded);
+        }
+
+        holder.require_auth();
+        Self::ensure_owner_still_authorized(env, &capability, amount)?;
+
+        capability.remaining_amount -= amount;
+        capability.remaining_uses -= 1;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Capability(capability_id), &capability);
+
+        events::emit_capability_used(
+            env,
+            events::CapabilityUsed {
+                capability_id,
+                holder: holder.clone(),
+                action: capability.action.clone(),
+                bounty_id,
+                amount_used: amount,
+                remaining_amount: capability.remaining_amount,
+                remaining_uses: capability.remaining_uses,
+                used_at: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(capability)
+    }
+
+    pub fn issue_capability(
+        env: Env,
+        owner: Address,
+        holder: Address,
+        action: CapabilityAction,
+        bounty_id: u64,
+        amount_limit: i128,
+        expiry: u64,
+        max_uses: u32,
+    ) -> Result<u64, Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        if max_uses == 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let now = env.ledger().timestamp();
+        if expiry <= now {
+            return Err(Error::InvalidDeadline);
+        }
+
+        owner.require_auth();
+        Self::validate_capability_scope_at_issue(&env, &owner, &action, bounty_id, amount_limit)?;
+
+        let capability_id = Self::next_capability_id(&env);
+        let capability = Capability {
+            owner: owner.clone(),
+            holder: holder.clone(),
+            action: action.clone(),
+            bounty_id,
+            amount_limit,
+            remaining_amount: amount_limit,
+            expiry,
+            remaining_uses: max_uses,
+            revoked: false,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Capability(capability_id), &capability);
+
+        events::emit_capability_issued(
+            &env,
+            events::CapabilityIssued {
+                capability_id,
+                owner,
+                holder,
+                action,
+                bounty_id,
+                amount_limit,
+                expires_at: expiry,
+                max_uses,
+                timestamp: now,
+            },
+        );
+
+        Ok(capability_id)
+    }
+
+    pub fn revoke_capability(env: Env, owner: Address, capability_id: u64) -> Result<(), Error> {
+        let mut capability = Self::load_capability(&env, capability_id)?;
+        if capability.owner != owner {
+            return Err(Error::Unauthorized);
+        }
+        owner.require_auth();
+
+        if capability.revoked {
+            return Ok(());
+        }
+
+        capability.revoked = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Capability(capability_id), &capability);
+
+        events::emit_capability_revoked(
+            &env,
+            events::CapabilityRevoked {
+                capability_id,
+                owner,
+                revoked_at: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    pub fn get_capability(env: Env, capability_id: u64) -> Result<Capability, Error> {
+        Self::load_capability(&env, capability_id)
     }
 
     /// Get current fee configuration (view function)
@@ -1118,6 +1476,77 @@ impl BountyEscrowContract {
         Ok(())
     }
 
+    /// Delegated release flow using a capability instead of admin auth.
+    /// The capability amount limit is consumed by `payout_amount`.
+    pub fn release_with_capability(
+        env: Env,
+        bounty_id: u64,
+        contributor: Address,
+        payout_amount: i128,
+        holder: Address,
+        capability_id: u64,
+    ) -> Result<(), Error> {
+        if Self::check_paused(&env, symbol_short!("release")) {
+            return Err(Error::FundsPaused);
+        }
+        if payout_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            return Err(Error::BountyNotFound);
+        }
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+        if escrow.status != EscrowStatus::Locked {
+            return Err(Error::FundsNotLocked);
+        }
+        if payout_amount > escrow.remaining_amount {
+            return Err(Error::InsufficientFunds);
+        }
+
+        Self::consume_capability(
+            &env,
+            &holder,
+            capability_id,
+            CapabilityAction::Release,
+            bounty_id,
+            payout_amount,
+        )?;
+
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let client = token::Client::new(&env, &token_addr);
+        client.transfer(
+            &env.current_contract_address(),
+            &contributor,
+            &payout_amount,
+        );
+
+        escrow.remaining_amount -= payout_amount;
+        if escrow.remaining_amount == 0 {
+            escrow.status = EscrowStatus::Released;
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(bounty_id), &escrow);
+
+        emit_funds_released(
+            &env,
+            FundsReleased {
+                version: EVENT_VERSION_V2,
+                bounty_id,
+                amount: payout_amount,
+                recipient: contributor,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
     /// Set the claim window duration (admin only).
     /// claim_window: seconds beneficiary has to claim after release is authorized.
     pub fn set_claim_window(env: Env, claim_window: u64) -> Result<(), Error> {
@@ -1246,6 +1675,83 @@ impl BountyEscrowContract {
             ClaimExecuted {
                 bounty_id,
                 recipient: claim.recipient.clone(),
+                amount: claim.amount,
+                claimed_at: now,
+            },
+        );
+        Ok(())
+    }
+
+    /// Delegated claim execution using a capability.
+    /// Funds are still transferred to the pending claim recipient.
+    pub fn claim_with_capability(
+        env: Env,
+        bounty_id: u64,
+        holder: Address,
+        capability_id: u64,
+    ) -> Result<(), Error> {
+        if Self::check_paused(&env, symbol_short!("release")) {
+            return Err(Error::FundsPaused);
+        }
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PendingClaim(bounty_id))
+        {
+            return Err(Error::BountyNotFound);
+        }
+
+        let mut claim: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingClaim(bounty_id))
+            .unwrap();
+
+        let now = env.ledger().timestamp();
+        if now > claim.expires_at {
+            return Err(Error::DeadlineNotPassed);
+        }
+        if claim.claimed {
+            return Err(Error::FundsNotLocked);
+        }
+
+        Self::consume_capability(
+            &env,
+            &holder,
+            capability_id,
+            CapabilityAction::Claim,
+            bounty_id,
+            claim.amount,
+        )?;
+
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let client = token::Client::new(&env, &token_addr);
+        client.transfer(
+            &env.current_contract_address(),
+            &claim.recipient,
+            &claim.amount,
+        );
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+        escrow.status = EscrowStatus::Released;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(bounty_id), &escrow);
+
+        claim.claimed = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingClaim(bounty_id), &claim);
+
+        env.events().publish(
+            (symbol_short!("claim"), symbol_short!("done")),
+            ClaimExecuted {
+                bounty_id,
+                recipient: claim.recipient,
                 amount: claim.amount,
                 claimed_at: now,
             },
@@ -1548,6 +2054,106 @@ impl BountyEscrowContract {
                 timestamp: now,
             },
         );
+        Ok(())
+    }
+
+    /// Delegated refund path using a capability.
+    /// This can be used for short-lived, bounded delegated refunds without granting admin rights.
+    pub fn refund_with_capability(
+        env: Env,
+        bounty_id: u64,
+        amount: i128,
+        holder: Address,
+        capability_id: u64,
+    ) -> Result<(), Error> {
+        if Self::check_paused(&env, symbol_short!("refund")) {
+            return Err(Error::FundsPaused);
+        }
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            return Err(Error::BountyNotFound);
+        }
+
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+
+        if escrow.status != EscrowStatus::Locked && escrow.status != EscrowStatus::PartiallyRefunded
+        {
+            return Err(Error::FundsNotLocked);
+        }
+        if amount > escrow.remaining_amount {
+            return Err(Error::InvalidAmount);
+        }
+
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::PendingClaim(bounty_id))
+        {
+            let claim: ClaimRecord = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PendingClaim(bounty_id))
+                .unwrap();
+            if !claim.claimed {
+                return Err(Error::ClaimPending);
+            }
+        }
+
+        Self::consume_capability(
+            &env,
+            &holder,
+            capability_id,
+            CapabilityAction::Refund,
+            bounty_id,
+            amount,
+        )?;
+
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let client = token::Client::new(&env, &token_addr);
+        let now = env.ledger().timestamp();
+        let refund_to = escrow.depositor.clone();
+
+        client.transfer(&env.current_contract_address(), &refund_to, &amount);
+
+        escrow.remaining_amount -= amount;
+        if escrow.remaining_amount == 0 {
+            escrow.status = EscrowStatus::Refunded;
+        } else {
+            escrow.status = EscrowStatus::PartiallyRefunded;
+        }
+
+        escrow.refund_history.push_back(RefundRecord {
+            amount,
+            recipient: refund_to.clone(),
+            timestamp: now,
+            mode: if escrow.status == EscrowStatus::Refunded {
+                RefundMode::Full
+            } else {
+                RefundMode::Partial
+            },
+        });
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(bounty_id), &escrow);
+
+        emit_funds_refunded(
+            &env,
+            FundsRefunded {
+                version: EVENT_VERSION_V2,
+                bounty_id,
+                amount,
+                refund_to,
+                timestamp: now,
+            },
+        );
+
         Ok(())
     }
 
@@ -2375,6 +2981,8 @@ mod test_auto_refund_permissions;
 // mod test_blacklist_and_whitelist;
 #[cfg(test)]
 mod test_bounty_escrow;
+#[cfg(test)]
+mod test_capability_tokens;
 #[cfg(test)]
 mod test_dispute_resolution;
 #[cfg(test)]
