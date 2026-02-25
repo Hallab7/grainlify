@@ -3810,7 +3810,7 @@ mod test_auto_refund_permissions;
 #[cfg(test)]
 mod test_bounty_escrow;
 #[cfg(test)]
-mod test_capability_tokens;
+mod test_compatibility;
 #[cfg(test)]
 mod test_dispute_resolution;
 #[cfg(test)]
