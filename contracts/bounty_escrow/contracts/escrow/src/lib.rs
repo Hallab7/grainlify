@@ -4,6 +4,9 @@ mod events;
 mod invariants;
 #[cfg(test)]
 mod test_metadata;
+#[cfg(test)]
+mod test_token_math;
+pub mod token_math;
 
 mod reentrancy_guard;
 mod test_cross_contract_interface;
@@ -350,9 +353,7 @@ mod anti_abuse {
     }
 }
 
-#[allow(dead_code)]
-const BASIS_POINTS: i128 = 10_000;
-const MAX_FEE_RATE: i128 = 5_000; // 50% max fee
+const MAX_FEE_RATE: i128 = token_math::MAX_FEE_RATE;
 const MAX_BATCH_SIZE: u32 = 20;
 
 #[contracterror]
@@ -644,18 +645,10 @@ impl BountyEscrowContract {
         Ok(())
     }
 
-    /// Calculate fee amount based on rate (in basis points)
+    /// Calculate fee using floor rounding. Delegates to `token_math::calculate_fee`.
     #[allow(dead_code)]
     fn calculate_fee(amount: i128, fee_rate: i128) -> i128 {
-        if fee_rate == 0 {
-            return 0;
-        }
-        // Fee = (amount * fee_rate) / BASIS_POINTS
-        // Using checked arithmetic to prevent overflow
-        amount
-            .checked_mul(fee_rate)
-            .and_then(|x| x.checked_div(BASIS_POINTS))
-            .unwrap_or(0)
+        token_math::calculate_fee(amount, fee_rate)
     }
 
     /// Get fee configuration (internal helper)
